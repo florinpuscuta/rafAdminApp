@@ -1,0 +1,37 @@
+# Caddyfile pentru adeplast-saas prod.
+#
+# Variabilă $DOMAIN e injectată din env (docker-compose.prod.yml → env).
+# Caddy obține automat certificat Let's Encrypt și reînnoiește în fundal.
+
+{$DOMAIN} {
+    # Backend API + endpoint-uri de gallery (pentru <img src="/api/gallery/...">)
+    handle /api/* {
+        reverse_proxy backend:8000
+    }
+
+    # Docs FastAPI + health (utile la debug; șterge în prod strict dacă vrei)
+    handle /docs* {
+        reverse_proxy backend:8000
+    }
+    handle /openapi.json {
+        reverse_proxy backend:8000
+    }
+
+    # Restul → frontend static (nginx din container-ul frontend pe port 80)
+    handle {
+        reverse_proxy frontend:80
+    }
+
+    # Limită upload fișiere (Excel-uri vânzări pot depăși 100MB)
+    request_body {
+        max_size 200MB
+    }
+
+    encode gzip zstd
+    log {
+        output file /data/caddy.log {
+            roll_size 10MB
+            roll_keep 5
+        }
+    }
+}

@@ -1,0 +1,92 @@
+# Production stack cu Caddy ca reverse-proxy + HTTPS automat (Let's Encrypt).
+#
+# Pornire (pe server):
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# Pre-condiții în `.env.prod`:
+#   DOMAIN=app.exemplu.ro              # A record pointat la IP-ul serverului
+#   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+#   DATABASE_URL=postgresql+asyncpg://...
+#   JWT_SECRET, FRONTEND_URL=https://${DOMAIN}
+#   CORS_ALLOWED_ORIGINS=https://${DOMAIN}
+#   MINIO_ROOT_USER, MINIO_ROOT_PASSWORD
+#   APP_ENV=prod
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data_prod:/data
+    restart: unless-stopped
+    # MinIO nu e expus public — doar backend-ul vorbește cu el pe rețeaua
+    # internă docker.
+    expose:
+      - "9000"
+      - "9001"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.prod
+    env_file: .env.prod
+    depends_on:
+      db:
+        condition: service_healthy
+      minio:
+        condition: service_started
+    restart: unless-stopped
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Frontend + backend pe același origin prin Caddy — `/api/...` e
+        # relative. Lasă gol.
+        VITE_API_URL: ""
+    restart: unless-stopped
+    expose:
+      - "80"
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data       # certificate + cont ACME (persistent)
+      - caddy_config:/config
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+
+volumes:
+  postgres_data_prod:
+  minio_data_prod:
+  caddy_data:
+  caddy_config:
