@@ -251,6 +251,16 @@ class RaionBrandShare(APISchema):
     category: str  # "own" | "competitor" | "other"
 
 
+class ChainRaionShare(APISchema):
+    """Cota pe o rețea client (Dedeman/Altex/Leroy Merlin/Hornbach/Alte),
+    pentru același sub_raion."""
+    chain: str
+    total_fete: int
+    own_fete: int
+    own_pct: float
+    brands: list[RaionBrandShare]
+
+
 class SubRaionShare(APISchema):
     raion_id: UUID
     raion_name: str
@@ -258,6 +268,7 @@ class SubRaionShare(APISchema):
     own_fete: int
     own_pct: float
     brands: list[RaionBrandShare]
+    chains: list[ChainRaionShare] = Field(default_factory=list)
 
 
 class ParentRaionShare(APISchema):

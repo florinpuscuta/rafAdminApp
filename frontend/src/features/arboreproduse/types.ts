@@ -17,6 +17,8 @@ export interface TreeSubgroup {
   qty: string;
   salesPrev: string;
   qtyPrev: string;
+  avgPrice: string | null;
+  avgPricePrev: string | null;
   products: TreeProduct[];
 }
 

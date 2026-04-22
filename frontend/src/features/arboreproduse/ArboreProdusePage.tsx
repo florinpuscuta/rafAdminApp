@@ -453,7 +453,13 @@ function SubgroupBlock({
         <span style={{ width: 12, fontSize: 10 }}>{open ? "▼" : "▶"}</span>
         <b style={{ fontSize: 12 }}>{s.label}</b>
         <span style={{ flex: 1, fontSize: 11, color: "var(--muted,#666)" }}>
-          {fmtRo(s.sales)} · {s.products.length} produse
+          {fmtRo(s.sales)} · {s.products.length} produse · preț mediu{" "}
+          <b style={{ color: "var(--text)" }}>{fmtPrice(s.avgPrice)}</b>
+          {s.avgPricePrev && toNum(s.avgPricePrev) > 0 && (
+            <span style={{ color: "var(--fg-muted,#888)" }}>
+              {" "}(an prec.: {fmtPrice(s.avgPricePrev)})
+            </span>
+          )}
         </span>
         <DiffPill pct={pctChange(s.sales, s.salesPrev)} />
       </div>

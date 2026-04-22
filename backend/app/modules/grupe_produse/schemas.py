@@ -81,6 +81,8 @@ class TreeSubgroup(APISchema):
     qty: Decimal
     sales_prev: Decimal = Decimal(0)
     qty_prev: Decimal = Decimal(0)
+    avg_price: Decimal | None = None
+    avg_price_prev: Decimal | None = None
     products: list[TreeProductRow] = Field(default_factory=list)
 
 

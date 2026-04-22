@@ -446,6 +446,11 @@ def _build_eps_subgroups(products: list[dict[str, Any]]) -> list[dict[str, Any]]
         sb["sales_prev"] += p["sales_prev"]
         sb["qty_prev"] += p["qty_prev"]
         sb["products"].append(p)
+    for sb in buckets.values():
+        sb["avg_price"] = (sb["sales"] / sb["qty"]) if sb["qty"] > 0 else None
+        sb["avg_price_prev"] = (
+            (sb["sales_prev"] / sb["qty_prev"]) if sb["qty_prev"] > 0 else None
+        )
     out = list(buckets.values())
     out.sort(key=lambda s: (-s["sales"], s["label"].lower()))
     return out

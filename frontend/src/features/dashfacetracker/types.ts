@@ -17,6 +17,14 @@ export interface RaionBrandShare {
   category: "own" | "competitor" | "other";
 }
 
+export interface ChainRaionShare {
+  chain: string;
+  totalFete: number;
+  ownFete: number;
+  ownPct: number;
+  brands: RaionBrandShare[];
+}
+
 export interface SubRaionShare {
   raionId: string;
   raionName: string;
@@ -24,6 +32,7 @@ export interface SubRaionShare {
   ownFete: number;
   ownPct: number;
   brands: RaionBrandShare[];
+  chains: ChainRaionShare[];
 }
 
 export interface ParentRaionShare {

@@ -1170,17 +1170,37 @@ def _build_raion_share_analysis(
     parents = [parents_map[pid] for pid in parent_ids if pid in parents_map]
     parents.sort(key=lambda p: p.sort_order)
 
-    # Grupare per raion_id — toate brandurile observate
+    # Grupare per raion_id — toate brandurile observate (sumă pe toate rețelele)
+    # și per raion_id × chain (rețea client) — pentru breakdown-ul per rețea.
     by_raion_full: dict[UUID, list[dict[str, Any]]] = {}
+    by_raion_chain: dict[UUID, dict[str, dict[UUID, dict[str, Any]]]] = {}
     for r in agg_rows:
-        by_raion_full.setdefault(r.raion_id, []).append({
+        chain = _extract_chain(getattr(r, "store_name", None))
+        cell = {
             "brand_id": r.brand_id,
             "brand_name": r.brand_name,
             "brand_color": r.brand_color,
             "brand_order": r.brand_order,
             "is_own": bool(r.is_own),
             "total_fete": int(r.total_fete or 0),
-        })
+        }
+        bucket = by_raion_chain.setdefault(r.raion_id, {}).setdefault(chain, {})
+        prev = bucket.get(r.brand_id)
+        if prev is None:
+            bucket[r.brand_id] = dict(cell)
+        else:
+            prev["total_fete"] += cell["total_fete"]
+
+    for rid, chains in by_raion_chain.items():
+        totals: dict[UUID, dict[str, Any]] = {}
+        for _chain, brand_map in chains.items():
+            for bid, cell in brand_map.items():
+                prev = totals.get(bid)
+                if prev is None:
+                    totals[bid] = dict(cell)
+                else:
+                    prev["total_fete"] += cell["total_fete"]
+        by_raion_full[rid] = list(totals.values())
 
     def _build_sub(sub_raion: Any) -> dict[str, Any]:
         # Competitori configurați pentru acest (own, raion)
@@ -1238,6 +1258,68 @@ def _build_raion_share_analysis(
                     "category": "competitor",
                 })
 
+        # Breakdown per rețea client (Dedeman/Altex/Leroy/Hornbach/Alte),
+        # reutilizând accepted_ids + configured_info pentru ordine/culori.
+        chain_order = ["Dedeman", "Altex", "Leroy Merlin", "Hornbach", "Alte"]
+        chains_out: list[dict[str, Any]] = []
+        chain_map = by_raion_chain.get(sub_raion.id, {})
+        sorted_chains = sorted(
+            chain_map.keys(),
+            key=lambda c: (chain_order.index(c) if c in chain_order else 99, c),
+        )
+        for chain in sorted_chains:
+            brand_map = chain_map[chain]
+            accepted_rows_s = [
+                b for bid, b in brand_map.items() if bid in accepted_ids
+            ]
+            own_fete_s = sum(
+                b["total_fete"] for b in accepted_rows_s if b["brand_id"] == own_id
+            )
+            total_s = sum(b["total_fete"] for b in accepted_rows_s)
+
+            brands_s: list[dict[str, Any]] = []
+            for b in accepted_rows_s:
+                if b["brand_id"] == own_id:
+                    brands_s.append({
+                        "brand_id": b["brand_id"],
+                        "brand_name": b["brand_name"],
+                        "brand_color": b["brand_color"],
+                        "total_fete": b["total_fete"],
+                        "pct": (b["total_fete"] / total_s * 100) if total_s else 0.0,
+                        "category": "own",
+                    })
+            for comp_id in sorted(competitor_ids, key=_comp_key):
+                found = next(
+                    (b for b in accepted_rows_s if b["brand_id"] == comp_id), None,
+                )
+                if found is not None:
+                    brands_s.append({
+                        "brand_id": found["brand_id"],
+                        "brand_name": found["brand_name"],
+                        "brand_color": found["brand_color"],
+                        "total_fete": found["total_fete"],
+                        "pct": (found["total_fete"] / total_s * 100) if total_s else 0.0,
+                        "category": "competitor",
+                    })
+                else:
+                    info = configured_info[comp_id]
+                    brands_s.append({
+                        "brand_id": comp_id,
+                        "brand_name": info.get("brand_name", "?"),
+                        "brand_color": info.get("brand_color", "#888"),
+                        "total_fete": 0,
+                        "pct": 0.0,
+                        "category": "competitor",
+                    })
+
+            chains_out.append({
+                "chain": chain,
+                "total_fete": total_s,
+                "own_fete": own_fete_s,
+                "own_pct": (own_fete_s / total_s * 100) if total_s else 0.0,
+                "brands": brands_s,
+            })
+
         return {
             "raion_id": sub_raion.id,
             "raion_name": sub_raion.name,
@@ -1245,6 +1327,7 @@ def _build_raion_share_analysis(
             "own_fete": own_fete,
             "own_pct": (own_fete / total * 100) if total else 0.0,
             "brands": brands_out,
+            "chains": chains_out,
         }
 
     parent_out: list[dict[str, Any]] = []
@@ -1374,10 +1457,12 @@ async def get_raion_share(
     if not relevant_sub_ids:
         return {"luna": luna, "requested_scope": scope, "analyses": []}
 
-    # Agregate fețe pentru toate sub-raioanele relevante
+    # Agregate fețe pentru toate sub-raioanele relevante — per magazin, ca să
+    # putem afișa atât suma (sub-raion) cât și breakdown per magazin în UI.
     agg_rows = (await session.execute(
         select(
             FacingSnapshot.raion_id,
+            FacingSnapshot.store_name,
             FacingBrand.id.label("brand_id"),
             FacingBrand.name.label("brand_name"),
             FacingBrand.color.label("brand_color"),
@@ -1393,6 +1478,7 @@ async def get_raion_share(
         )
         .group_by(
             FacingSnapshot.raion_id,
+            FacingSnapshot.store_name,
             FacingBrand.id,
             FacingBrand.name,
             FacingBrand.color,

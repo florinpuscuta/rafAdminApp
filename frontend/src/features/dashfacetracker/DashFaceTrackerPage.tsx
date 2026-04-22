@@ -5,11 +5,14 @@ import { useCompanyScope, type CompanyScope } from "../../shared/ui/CompanyScope
 import { getFacingMonths, getRaionShare } from "./api";
 import type {
   ParentRaionShare,
+  RaionBrandShare,
   RaionShareAnalysis,
   RaionShareResponse,
   RaionShareScope,
   SubRaionShare,
 } from "./types";
+
+const OWN_BRAND_NAMES = new Set(["adeplast", "sika"]);
 
 function scopeFromCompany(c: CompanyScope): RaionShareScope {
   if (c === "sika") return "sika";
@@ -112,15 +115,20 @@ export default function DashFaceTrackerPage() {
       {error && <div style={styles.error}>{error}</div>}
       {loading && !data && <div style={styles.loading}>Se încarcă…</div>}
 
-      {data && !loading && data.analyses.length === 0 && (
-        <div style={styles.empty}>
-          Nu există date pentru luna {fmtLuna(data.luna)}.
-        </div>
-      )}
-
-      {data && data.analyses.map((a) => (
-        <AnalysisSection key={a.scope} analysis={a} />
-      ))}
+      {(() => {
+        const visible = data?.analyses.filter((a) => a.scope !== "sika") ?? [];
+        if (!data) return null;
+        if (!loading && visible.length === 0) {
+          return (
+            <div style={styles.empty}>
+              Nu există date pentru luna {fmtLuna(data.luna)}.
+            </div>
+          );
+        }
+        return visible.map((a) => (
+          <AnalysisSection key={a.scope} analysis={a} />
+        ));
+      })()}
     </div>
   );
 }
@@ -194,6 +202,9 @@ function ParentCard({ parent, ownName }: { parent: ParentRaionShare; ownName: st
 
 function SubRaionRow({ sub, ownName }: { sub: SubRaionShare; ownName: string }) {
   const empty = sub.totalFete === 0;
+  const sortedBrands = [...sub.brands].sort((a, b) => b.pct - a.pct);
+  const isMine = (b: RaionBrandShare) =>
+    b.category === "own" || OWN_BRAND_NAMES.has(b.brandName.toLowerCase());
   return (
     <div style={styles.subRow}>
       <div style={styles.subHeader}>
@@ -218,43 +229,132 @@ function SubRaionRow({ sub, ownName }: { sub: SubRaionShare; ownName: string }) 
       </div>
 
       {!empty && (
-        <>
-          <div style={styles.bar}>
-            {sub.brands.map((b, i) => (
-              <div
-                key={`${b.brandId ?? "other"}-${i}`}
-                style={{
-                  width: `${b.pct}%`,
-                  background: b.brandColor,
-                  opacity: b.category === "own" ? 1 : b.category === "competitor" ? 0.9 : 0.55,
-                }}
-                title={`${b.brandName}: ${fmtRo(b.totalFete)} fețe (${b.pct.toFixed(1)}%)`}
-              />
-            ))}
-          </div>
-          <div style={styles.brandLegend}>
-            {sub.brands.map((b, i) => (
-              <span key={`${b.brandId ?? "other"}-${i}`} style={styles.legendItem}>
-                <span style={{
-                  width: 10, height: 10, borderRadius: 2,
-                  background: b.brandColor, display: "inline-block",
-                  opacity: b.category === "other" ? 0.55 : 1,
-                }} />
-                <span style={{
-                  fontWeight: b.category === "own" ? 700 : 500,
-                  color: b.category === "own" ? "var(--text)" : "var(--muted)",
-                }}>
-                  {b.brandName}
-                </span>
-                <span style={{ color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>
-                  {b.pct.toFixed(1)}%
-                </span>
-              </span>
-            ))}
-          </div>
-        </>
+        <div style={styles.pieRow}>
+          <PiePanel
+            label="Total"
+            totalFete={sub.totalFete}
+            ownPct={sub.ownPct}
+            brands={sortedBrands}
+            isMine={isMine}
+            highlight
+          />
+          {sub.chains
+            .filter((c) => c.totalFete > 0)
+            .map((c) => {
+              const sorted = [...c.brands].sort((a, b) => b.pct - a.pct);
+              return (
+                <PiePanel
+                  key={c.chain}
+                  label={c.chain}
+                  totalFete={c.totalFete}
+                  ownPct={c.ownPct}
+                  brands={sorted}
+                  isMine={isMine}
+                />
+              );
+            })}
+        </div>
       )}
     </div>
+  );
+}
+
+function PiePanel({
+  label, totalFete, ownPct, brands, isMine, highlight = false,
+}: {
+  label: string;
+  totalFete: number;
+  ownPct: number;
+  brands: RaionBrandShare[];
+  isMine: (b: RaionBrandShare) => boolean;
+  highlight?: boolean;
+}) {
+  return (
+    <div style={{
+      ...styles.piePanel,
+      background: highlight ? "var(--bg-elevated,#fafafa)" : "transparent",
+      border: highlight ? "1px solid var(--border)" : "1px solid transparent",
+    }}>
+      <div style={styles.pieLabel} title={label}>{label}</div>
+      <DonutChart brands={brands} size={76} />
+      <div style={styles.pieMeta}>
+        <span style={{ color: "var(--muted)" }}>{fmtRo(totalFete)} fețe</span>
+        <span style={{
+          color: ownPct >= 30 ? "var(--green)" : "#d97706",
+          fontWeight: 700,
+        }}>{ownPct.toFixed(1)}%</span>
+      </div>
+      <div style={styles.pieLegend}>
+        {brands.map((b, i) => (
+          <span key={`${b.brandId ?? "other"}-${i}`} style={styles.legendItem}>
+            <span style={{
+              width: 8, height: 8, borderRadius: 2,
+              background: b.brandColor, display: "inline-block",
+              opacity: b.category === "other" ? 0.55 : 1,
+            }} />
+            <span style={{
+              fontWeight: isMine(b) ? 700 : 500,
+              color: isMine(b) ? "var(--text)" : "var(--muted)",
+            }}>{b.brandName}</span>
+            <span style={{ color: "var(--muted)", fontVariantNumeric: "tabular-nums" }}>
+              {b.pct.toFixed(1)}%
+            </span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DonutChart({ brands, size }: { brands: RaionBrandShare[]; size: number }) {
+  const r = size / 2;
+  const inner = r * 0.58;
+  const segments = brands.filter((b) => b.pct > 0);
+  let acc = 0;
+  const arcs = segments.map((b) => {
+    const start = acc;
+    const end = acc + b.pct;
+    acc = end;
+    return { b, start, end };
+  });
+
+  const toXY = (pct: number, radius: number) => {
+    const angle = (pct / 100) * 2 * Math.PI - Math.PI / 2;
+    return [r + radius * Math.cos(angle), r + radius * Math.sin(angle)];
+  };
+
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} style={{ flexShrink: 0 }}>
+      {arcs.length === 1 ? (
+        <>
+          <circle cx={r} cy={r} r={r} fill={arcs[0].b.brandColor}
+            opacity={arcs[0].b.category === "other" ? 0.55 : 1} />
+          <circle cx={r} cy={r} r={inner} fill="var(--card,#fff)" />
+        </>
+      ) : (
+        arcs.map((a, i) => {
+          const [x1, y1] = toXY(a.start, r);
+          const [x2, y2] = toXY(a.end, r);
+          const [x3, y3] = toXY(a.end, inner);
+          const [x4, y4] = toXY(a.start, inner);
+          const large = a.end - a.start > 50 ? 1 : 0;
+          const d = [
+            `M ${x1} ${y1}`,
+            `A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`,
+            `L ${x3} ${y3}`,
+            `A ${inner} ${inner} 0 ${large} 0 ${x4} ${y4}`,
+            "Z",
+          ].join(" ");
+          return (
+            <path key={`${a.b.brandId ?? "other"}-${i}`} d={d}
+              fill={a.b.brandColor}
+              opacity={a.b.category === "other" ? 0.55 : a.b.category === "competitor" ? 0.9 : 1}>
+              <title>{`${a.b.brandName}: ${fmtRo(a.b.totalFete)} fețe (${a.b.pct.toFixed(1)}%)`}</title>
+            </path>
+          );
+        })
+      )}
+    </svg>
   );
 }
 
@@ -314,15 +414,30 @@ const styles: Record<string, React.CSSProperties> = {
   },
   subName: { fontSize: 13, fontWeight: 600, color: "var(--text)" },
   subMeta: { display: "flex", alignItems: "center", gap: 8, fontSize: 12 },
-  bar: {
-    display: "flex", height: 18, width: "100%",
-    borderRadius: 4, overflow: "hidden",
-    background: "var(--bg-elevated,#fafafa)",
-    border: "1px solid var(--border)",
+  pieRow: {
+    display: "flex", alignItems: "flex-start", gap: 10, marginTop: 4,
+    flexWrap: "nowrap", overflowX: "auto",
+  },
+  piePanel: {
+    display: "flex", flexDirection: "column", alignItems: "center",
+    gap: 4, padding: "6px 8px", borderRadius: 6,
+    flex: "1 1 0", minWidth: 0,
+  },
+  pieLabel: {
+    fontSize: 11, fontWeight: 600, color: "var(--text)",
+    maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis",
+    whiteSpace: "nowrap",
+  },
+  pieMeta: {
+    display: "flex", gap: 6, fontSize: 10, alignItems: "baseline",
+  },
+  pieLegend: {
+    display: "flex", flexDirection: "column", gap: 2,
+    fontSize: 10, alignItems: "flex-start", width: "100%",
   },
   brandLegend: {
-    display: "flex", flexWrap: "wrap", gap: 10,
-    fontSize: 11,
+    display: "flex", flexDirection: "column", flexWrap: "wrap",
+    gap: 4, fontSize: 11,
   },
   legendItem: { display: "inline-flex", alignItems: "center", gap: 4 },
 };
