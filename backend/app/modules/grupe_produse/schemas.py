@@ -71,6 +71,19 @@ class TreeProductRow(APISchema):
     avg_price_prev: Decimal | None = None
 
 
+class TreeSubgroup(APISchema):
+    """Subgrupă în interiorul unei categorii (ex. EPS 50, EPS 80) —
+    extrasă din numele produsului. Populată doar pentru anumite categorii
+    (actual: EPS)."""
+    key: str
+    label: str
+    sales: Decimal
+    qty: Decimal
+    sales_prev: Decimal = Decimal(0)
+    qty_prev: Decimal = Decimal(0)
+    products: list[TreeProductRow] = Field(default_factory=list)
+
+
 class TreeCategory(APISchema):
     category_id: UUID | None = None
     code: str
@@ -80,6 +93,7 @@ class TreeCategory(APISchema):
     sales_prev: Decimal = Decimal(0)
     qty_prev: Decimal = Decimal(0)
     products: list[TreeProductRow] = Field(default_factory=list)
+    subgroups: list[TreeSubgroup] | None = None
 
 
 class TreeBrand(APISchema):

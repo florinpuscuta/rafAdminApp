@@ -10,6 +10,16 @@ export interface TreeProduct {
   avgPricePrev: string | null;
 }
 
+export interface TreeSubgroup {
+  key: string;
+  label: string;
+  sales: string;
+  qty: string;
+  salesPrev: string;
+  qtyPrev: string;
+  products: TreeProduct[];
+}
+
 export interface TreeCategory {
   categoryId: string | null;
   code: string;
@@ -19,6 +29,7 @@ export interface TreeCategory {
   salesPrev: string;
   qtyPrev: string;
   products: TreeProduct[];
+  subgroups: TreeSubgroup[] | null;
 }
 
 export interface TreeBrand {

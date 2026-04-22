@@ -6,7 +6,7 @@ import { TableSkeleton } from "../../shared/ui/Skeleton";
 import { useToast } from "../../shared/ui/ToastProvider";
 import { getArboreProduse } from "./api";
 import type {
-  ArboreProduseResponse, TreeBrand, TreeCategory,
+  ArboreProduseResponse, TreeBrand, TreeCategory, TreeProduct, TreeSubgroup,
 } from "./types";
 
 const CURRENT_YEAR = new Date().getFullYear();
@@ -93,6 +93,7 @@ export default function ArboreProdusePage() {
   const [loading, setLoading] = useState(true);
   const [openBrands, setOpenBrands] = useState<Set<string>>(new Set());
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
+  const [openSubs, setOpenSubs] = useState<Set<string>>(new Set());
 
   // Traduce state-ul modul/luni → argumentul pentru getArboreProduse.
   const monthsArg: number[] | "all" | undefined = useMemo(() => {
@@ -115,11 +116,22 @@ export default function ArboreProdusePage() {
   }, [apiScope, year, monthsArg, toast]);
 
   function toggleMonth(m: number) {
-    setMonthMode("custom");
-    setCustomMonths((s) => {
-      const n = new Set(s);
-      n.has(m) ? n.delete(m) : n.add(m);
-      return n;
+    // Primul clic din YTD/Toate doar TRECE în custom păstrând selecția
+    // existentă (fără să toggleze luna clicată) — în custom-ul deja stabilit,
+    // clicurile fac toggle normal (add/remove).
+    if (monthMode !== "custom") {
+      const seed: Set<number> = monthMode === "all"
+        ? new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+        : new Set(data?.ytdMonths ?? []);
+      seed.add(m);
+      setCustomMonths(seed);
+      setMonthMode("custom");
+      return;
+    }
+    setCustomMonths((prev) => {
+      const next = new Set(prev);
+      next.has(m) ? next.delete(m) : next.add(m);
+      return next;
     });
   }
 
@@ -135,6 +147,13 @@ export default function ArboreProdusePage() {
   };
   const toggleCat = (k: string) => {
     setOpenCats((s) => {
+      const n = new Set(s);
+      n.has(k) ? n.delete(k) : n.add(k);
+      return n;
+    });
+  };
+  const toggleSub = (k: string) => {
+    setOpenSubs((s) => {
       const n = new Set(s);
       n.has(k) ? n.delete(k) : n.add(k);
       return n;
@@ -185,26 +204,26 @@ export default function ArboreProdusePage() {
           {/* Rând 1: YTD, Tot anul, Nimic, Ian, Feb, Mar, Apr */}
           <button
             type="button"
-            data-compact="true"
+            data-raw="true"
             onClick={() => { setMonthMode("ytd"); setCustomMonths(new Set()); }}
-            style={{ ...chipWhite(monthMode === "ytd", "#0ea5e9") }}
+            style={chipStyle(monthMode === "ytd", "#16a34a")}
             title="Lunile cu date în anul curent"
           >
             YTD
           </button>
           <button
             type="button"
-            data-compact="true"
+            data-raw="true"
             onClick={() => { setMonthMode("all"); setCustomMonths(new Set()); }}
-            style={{ ...chipWhite(monthMode === "all", "#0ea5e9") }}
+            style={chipStyle(monthMode === "all", "#16a34a")}
           >
             Toate
           </button>
           <button
             type="button"
-            data-compact="true"
+            data-raw="true"
             onClick={() => { setMonthMode("custom"); setCustomMonths(new Set()); }}
-            style={{ ...chipWhite(monthMode === "custom" && customMonths.size === 0, "#ef4444") }}
+            style={chipStyle(monthMode === "custom" && customMonths.size === 0, "#dc2626")}
             title="Deselectează tot"
           >
             Nimic
@@ -218,9 +237,9 @@ export default function ArboreProdusePage() {
               <button
                 key={m}
                 type="button"
-                data-compact="true"
+                data-raw="true"
                 onClick={() => toggleMonth(m)}
-                style={{ ...chipWhite(active, "#22c55e") }}
+                style={chipStyle(active, "#16a34a")}
               >
                 {ab}
               </button>
@@ -330,17 +349,21 @@ export default function ArboreProdusePage() {
                   </div>
                   {bOpen && (
                     <div style={{ padding: "0 10px 10px 26px" }}>
-                      {b.categories.map((c) => (
-                        <CategoryBlock
-                          key={(c.categoryId ?? c.label) + bKey}
-                          brandKey={bKey}
-                          c={c}
-                          open={openCats.has(bKey + "::" + (c.categoryId ?? c.label))}
-                          onToggle={() =>
-                            toggleCat(bKey + "::" + (c.categoryId ?? c.label))
-                          }
-                        />
-                      ))}
+                      {b.categories.map((c) => {
+                        const catKey = bKey + "::" + (c.categoryId ?? c.label);
+                        return (
+                          <CategoryBlock
+                            key={(c.categoryId ?? c.label) + bKey}
+                            brandKey={bKey}
+                            c={c}
+                            open={openCats.has(catKey)}
+                            onToggle={() => toggleCat(catKey)}
+                            openSubs={openSubs}
+                            onToggleSub={toggleSub}
+                            catKey={catKey}
+                          />
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -353,12 +376,100 @@ export default function ArboreProdusePage() {
   );
 }
 
+function ProductsTable({
+  products, parentSales,
+}: {
+  products: TreeProduct[]; parentSales: string;
+}) {
+  const total = toNum(parentSales);
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table style={styles.table}>
+        <thead>
+          <tr>
+            <th style={th}>Produs</th>
+            <th style={{ ...th, textAlign: "right" }}>Vânzări</th>
+            <th style={{ ...th, textAlign: "right" }}>An preced.</th>
+            <th style={{ ...th, textAlign: "right" }}>Δ%</th>
+            <th style={{ ...th, textAlign: "right" }}>Cantitate</th>
+            <th style={{ ...th, textAlign: "right" }}>Preț mediu</th>
+            <th style={{ ...th, width: 100 }}>Pondere</th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map((p) => {
+            const pct = total > 0 ? (toNum(p.sales) / total) * 100 : 0;
+            const delta = pctChange(p.sales, p.salesPrev);
+            return (
+              <tr key={p.productId}>
+                <td style={td}>{p.name}</td>
+                <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
+                  {fmtRo(p.sales)}
+                </td>
+                <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums",
+                             color: "var(--fg-muted,#888)" }}>
+                  {fmtRo(p.salesPrev)}
+                </td>
+                <td style={{ ...td, textAlign: "right" }}>
+                  <DiffPill pct={delta} />
+                </td>
+                <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  {fmtRo(p.qty)}
+                </td>
+                <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                  {fmtPrice(p.avgPrice)}
+                </td>
+                <td style={td}>
+                  <div style={{
+                    height: 8, background: "var(--bg-elevated,#eee)",
+                    borderRadius: 2, overflow: "hidden",
+                  }}>
+                    <div style={{
+                      width: `${Math.min(100, pct)}%`, height: "100%",
+                      background: "#3b82f6",
+                    }} />
+                  </div>
+                  <div style={{ fontSize: 10, color: "var(--fg-muted,#888)" }}>
+                    {pct.toFixed(1)}%
+                  </div>
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SubgroupBlock({
+  s, open, onToggle,
+}: {
+  s: TreeSubgroup; open: boolean; onToggle: () => void;
+}) {
+  return (
+    <div style={styles.subBlock}>
+      <div onClick={onToggle} style={styles.subHeader} role="button">
+        <span style={{ width: 12, fontSize: 10 }}>{open ? "▼" : "▶"}</span>
+        <b style={{ fontSize: 12 }}>{s.label}</b>
+        <span style={{ flex: 1, fontSize: 11, color: "var(--muted,#666)" }}>
+          {fmtRo(s.sales)} · {s.products.length} produse
+        </span>
+        <DiffPill pct={pctChange(s.sales, s.salesPrev)} />
+      </div>
+      {open && <ProductsTable products={s.products} parentSales={s.sales} />}
+    </div>
+  );
+}
+
 function CategoryBlock({
-  brandKey, c, open, onToggle,
+  brandKey, c, open, onToggle, openSubs, onToggleSub, catKey,
 }: {
   brandKey: string; c: TreeCategory; open: boolean; onToggle: () => void;
+  openSubs: Set<string>; onToggleSub: (k: string) => void; catKey: string;
 }) {
   void brandKey;
+  const hasSubgroups = c.subgroups != null && c.subgroups.length > 0;
   return (
     <div style={styles.catBlock}>
       <div onClick={onToggle} style={styles.catHeader} role="button">
@@ -368,81 +479,45 @@ function CategoryBlock({
           ({c.code})
         </span>
         <span style={{ flex: 1, fontSize: 12, color: "var(--muted, #666)" }}>
-          {fmtRo(c.sales)} · {c.products.length} produse
+          {fmtRo(c.sales)}
+          {hasSubgroups
+            ? ` · ${c.subgroups!.length} subgrupe · ${c.products.length} produse`
+            : ` · ${c.products.length} produse`}
         </span>
         <DiffPill pct={pctChange(c.sales, c.salesPrev)} />
       </div>
       {open && (
-        <div style={{ overflowX: "auto" }}>
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={th}>Produs</th>
-                <th style={{ ...th, textAlign: "right" }}>Vânzări</th>
-                <th style={{ ...th, textAlign: "right" }}>An preced.</th>
-                <th style={{ ...th, textAlign: "right" }}>Δ%</th>
-                <th style={{ ...th, textAlign: "right" }}>Cantitate</th>
-                <th style={{ ...th, textAlign: "right" }}>Preț mediu</th>
-                <th style={{ ...th, width: 100 }}>Pondere</th>
-              </tr>
-            </thead>
-            <tbody>
-              {c.products.map((p) => {
-                const pct = toNum(c.sales) > 0
-                  ? (toNum(p.sales) / toNum(c.sales)) * 100 : 0;
-                const delta = pctChange(p.sales, p.salesPrev);
-                return (
-                  <tr key={p.productId}>
-                    <td style={td}>{p.name}</td>
-                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 600 }}>
-                      {fmtRo(p.sales)}
-                    </td>
-                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums",
-                                 color: "var(--fg-muted,#888)" }}>
-                      {fmtRo(p.salesPrev)}
-                    </td>
-                    <td style={{ ...td, textAlign: "right" }}>
-                      <DiffPill pct={delta} />
-                    </td>
-                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                      {fmtRo(p.qty)}
-                    </td>
-                    <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                      {fmtPrice(p.avgPrice)}
-                    </td>
-                    <td style={td}>
-                      <div style={{
-                        height: 8, background: "var(--bg-elevated,#eee)",
-                        borderRadius: 2, overflow: "hidden",
-                      }}>
-                        <div style={{
-                          width: `${Math.min(100, pct)}%`, height: "100%",
-                          background: "#3b82f6",
-                        }} />
-                      </div>
-                      <div style={{ fontSize: 10, color: "var(--fg-muted,#888)" }}>
-                        {pct.toFixed(1)}%
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        hasSubgroups ? (
+          <div style={{ padding: "4px 10px 8px 20px" }}>
+            {c.subgroups!.map((s) => {
+              const subKey = catKey + "::sub::" + s.key;
+              return (
+                <SubgroupBlock
+                  key={subKey}
+                  s={s}
+                  open={openSubs.has(subKey)}
+                  onToggle={() => onToggleSub(subKey)}
+                />
+              );
+            })}
+          </div>
+        ) : (
+          <ProductsTable products={c.products} parentSales={c.sales} />
+        )
       )}
     </div>
   );
 }
 
-function chipWhite(active: boolean, color: string): React.CSSProperties {
+function chipStyle(active: boolean, color: string): React.CSSProperties {
   return {
-    padding: "4px 6px", fontSize: 11, fontWeight: 600,
-    background: active ? color : "#fff",
-    color: active ? "#fff" : color,
-    border: `1px solid ${active ? color : color + "55"}`,
-    borderRadius: 8, cursor: "pointer", whiteSpace: "nowrap",
-    minHeight: 30, minWidth: 0, textTransform: "lowercase" as const,
+    padding: "4px 8px", fontSize: 11, fontWeight: 600,
+    background: active ? color : "#f0f0f0",
+    color: active ? "#fff" : "#444",
+    border: `1px solid ${active ? color : "#ccc"}`,
+    borderRadius: 6, cursor: "pointer", whiteSpace: "nowrap",
+    height: 26, minWidth: 0, textTransform: "lowercase" as const,
+    fontFamily: "inherit",
   };
 }
 
@@ -455,24 +530,6 @@ const styles: Record<string, React.CSSProperties> = {
     background: "var(--bg-elevated,#fafafa)",
     border: "1px solid var(--border,#eee)", borderRadius: 6,
     marginBottom: 10,
-  },
-  modeBtn: {
-    padding: "4px 10px", fontSize: 12, fontWeight: 600,
-    border: "1px solid var(--border,#ccc)", borderRadius: 4,
-    background: "var(--bg-elevated,#fff)", color: "var(--fg-muted,#555)",
-    cursor: "pointer",
-  },
-  modeBtnActive: {
-    background: "#0ea5e9", color: "#fff", borderColor: "#0ea5e9",
-  },
-  monthBtn: {
-    width: 36, padding: "3px 0", fontSize: 11, fontWeight: 600,
-    border: "1px solid var(--border,#ddd)", borderRadius: 3,
-    background: "var(--bg-elevated,#fff)", color: "var(--fg-muted,#888)",
-    cursor: "pointer", textTransform: "lowercase",
-  },
-  monthBtnActive: {
-    background: "#22c55e", color: "#fff", borderColor: "#22c55e",
   },
   dashGrid: {
     display: "grid",
@@ -507,6 +564,16 @@ const styles: Record<string, React.CSSProperties> = {
   },
   catHeader: {
     display: "flex", alignItems: "center", gap: 6, padding: "6px 10px",
+    cursor: "pointer", userSelect: "none",
+  },
+  subBlock: {
+    background: "var(--bg-elevated,#fff)",
+    border: "1px solid var(--border,#eee)",
+    borderRadius: 3,
+    marginBottom: 4,
+  },
+  subHeader: {
+    display: "flex", alignItems: "center", gap: 6, padding: "5px 8px",
     cursor: "pointer", userSelect: "none",
   },
   table: { borderCollapse: "collapse", width: "100%" },

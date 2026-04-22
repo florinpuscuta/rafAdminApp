@@ -410,6 +410,47 @@ def _classify_sika_tm(name: str | None) -> str:
     return "Altele"
 
 
+_EPS_CLASS_RE = _re.compile(r"[Ee][Pp][Ss][ _\-]*(\d{2,3})")
+
+
+def _eps_subgroup(name: str | None) -> tuple[str, str]:
+    """(key, label) pentru subgrupa EPS extrasă din numele produsului.
+
+    Ex: "BAUDEMAN EPS 80 100MM" → ("80", "EPS 80").
+    Produse fără număr după "EPS" → ("unknown", "Fără clasă").
+    """
+    m = _EPS_CLASS_RE.search(name or "")
+    if not m:
+        return ("unknown", "Fără clasă")
+    cls = m.group(1)
+    return (cls, f"EPS {cls}")
+
+
+def _build_eps_subgroups(products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Grupează produsele EPS după clasa extrasă din nume (50, 70, 80, ...).
+    Returnează o listă sortată DESC după vânzări."""
+    buckets: dict[str, dict[str, Any]] = {}
+    for p in products:
+        key, label = _eps_subgroup(p["name"])
+        sb = buckets.setdefault(key, {
+            "key": key,
+            "label": label,
+            "sales": Decimal(0),
+            "qty": Decimal(0),
+            "sales_prev": Decimal(0),
+            "qty_prev": Decimal(0),
+            "products": [],
+        })
+        sb["sales"] += p["sales"]
+        sb["qty"] += p["qty"]
+        sb["sales_prev"] += p["sales_prev"]
+        sb["qty_prev"] += p["qty_prev"]
+        sb["products"].append(p)
+    out = list(buckets.values())
+    out.sort(key=lambda s: (-s["sales"], s["label"].lower()))
+    return out
+
+
 async def build_tree(
     session: AsyncSession,
     tenant_id: UUID,
@@ -625,7 +666,7 @@ async def build_tree(
         cats_out: list[dict[str, Any]] = []
         for cb in bb["categories"].values():
             cb["products"].sort(key=lambda p: (-p["sales"], p["name"].lower()))
-            cats_out.append({
+            cat_out: dict[str, Any] = {
                 "category_id": cb["category_id"],
                 "code": cb["code"],
                 "label": cb["label"],
@@ -634,7 +675,11 @@ async def build_tree(
                 "sales_prev": cb["sales_prev"],
                 "qty_prev": cb["qty_prev"],
                 "products": cb["products"],
-            })
+                "subgroups": None,
+            }
+            if (cb["code"] or "").upper() == "EPS":
+                cat_out["subgroups"] = _build_eps_subgroups(cb["products"])
+            cats_out.append(cat_out)
         cats_out.sort(key=lambda c: (-c["sales"], c["label"].lower()))
         brands_out.append({
             "brand_id": bb["brand_id"],
