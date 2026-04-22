@@ -37,11 +37,13 @@ import PrivacyPage from "./features/legal/PrivacyPage";
 import TermsPage from "./features/legal/TermsPage";
 import GalleryPage from "./features/gallery/GalleryPage";
 import ActivitatePage from "./features/activitate/ActivitatePage";
+import AnalizaMagazinPage from "./features/analizamagazin/AnalizaMagazinPage";
 import AnalizaPeLuniPage from "./features/analizapeluni/AnalizaPeLuniPage";
 import BonusariPage from "./features/bonusari/BonusariPage";
 import ComenziFaraIndPage from "./features/comenzifaraind/ComenziFaraIndPage";
 import GrupeProdusePage from "./features/grupeproduse/GrupeProdusePage";
 import ArboreProdusePage from "./features/arboreproduse/ArboreProdusePage";
+import ArboreClientiPage from "./features/arboreproduse/ArboreClientiPage";
 import MarcaPrivataPage from "./features/marcaprivata/MarcaPrivataPage";
 import MktCatalogPage from "./features/mktcatalog/MktCatalogPage";
 import MktConcurentaPage from "./features/mktconcurenta/MktConcurentaPage";
@@ -81,7 +83,7 @@ import UnmappedStoresPage from "./features/stores/UnmappedStoresPage";
 import TenantSettingsPage from "./features/tenants/TenantSettingsPage";
 import UsersPage from "./features/users/UsersPage";
 import ComingSoonPage from "./shared/ui/ComingSoonPage";
-import { CompanyScopeProvider } from "./shared/ui/CompanyScopeProvider";
+import { CompanyScopeProvider, useCompanyScope } from "./shared/ui/CompanyScopeProvider";
 import { ConfirmProvider } from "./shared/ui/ConfirmDialog";
 import { ErrorBoundary } from "./shared/ui/ErrorBoundary";
 import { RouteBoundary } from "./shared/ui/RouteBoundary";
@@ -135,6 +137,12 @@ function RequireAuth({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function NoSikadp({ children }: { children: ReactNode }) {
+  const { scope } = useCompanyScope();
+  if (scope === "sikadp") return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function AuthedShell() {
   return (
     <>
@@ -146,7 +154,7 @@ function AuthedShell() {
           <Route path="/sales" element={<RouteBoundary name="sales"><SalesPage /></RouteBoundary>} />
           <Route path="/consolidat" element={<RouteBoundary name="consolidat"><ConsolidatPage /></RouteBoundary>} />
           <Route path="/gallery" element={<RouteBoundary name="gallery"><GalleryPage /></RouteBoundary>} />
-          <Route path="/prices/ka-vs-tt" element={<RouteBoundary name="prices-ka-tt"><KaVsTtPage /></RouteBoundary>} />
+          <Route path="/prices/ka-vs-tt" element={<NoSikadp><RouteBoundary name="prices-ka-tt"><KaVsTtPage /></RouteBoundary></NoSikadp>} />
           <Route path="/chat" element={<RouteBoundary name="chat"><ChatPage /></RouteBoundary>} />
           <Route path="/stores" element={<RouteBoundary name="stores"><StoresPage /></RouteBoundary>} />
           <Route path="/stores/:id" element={<RouteBoundary name="store-detail"><StoreDetailPage /></RouteBoundary>} />
@@ -168,6 +176,7 @@ function AuthedShell() {
               / Taskuri / Probleme / Grupe / Top / Mortar / EPS / PrivateLabel
               / Preturi / Forecast / Settings Upload. */}
           <Route path="/analiza/luni" element={<RouteBoundary name="analiza-luni"><AnalizaPeLuniPage /></RouteBoundary>} />
+          <Route path="/analiza/magazin" element={<NoSikadp><RouteBoundary name="analiza-magazin"><AnalizaMagazinPage /></RouteBoundary></NoSikadp>} />
           <Route path="/analiza/zi" element={<RouteBoundary name="analiza-zi"><VzLaZiPage /></RouteBoundary>} />
           <Route path="/analiza/comenzi" element={<RouteBoundary name="analiza-comenzi"><ComenziFaraIndPage /></RouteBoundary>} />
           <Route path="/marketing/concurenta" element={<RouteBoundary name="marketing-concurenta"><MktConcurentaPage /></RouteBoundary>} />
@@ -188,16 +197,17 @@ function AuthedShell() {
           <Route path="/activitate" element={<RouteBoundary name="activitate"><ActivitatePage /></RouteBoundary>} />
           <Route path="/probleme/:period" element={<RouteBoundary name="probleme"><ProblemePage /></RouteBoundary>} />
           <Route path="/grupe-arbore" element={<RouteBoundary name="grupe-arbore"><ArboreProdusePage /></RouteBoundary>} />
+          <Route path="/grupe-arbore-clienti" element={<RouteBoundary name="grupe-arbore-clienti"><ArboreClientiPage /></RouteBoundary>} />
           <Route path="/grupe/:group" element={<RouteBoundary name="grupe"><GrupeProdusePage /></RouteBoundary>} />
           <Route path="/topprod/:group" element={<RouteBoundary name="topprod"><TopProdusePage /></RouteBoundary>} />
           <Route path="/mortar" element={<RouteBoundary name="mortar"><MortarePage /></RouteBoundary>} />
           <Route path="/eps" element={<RouteBoundary name="eps"><EpsDetailsPage /></RouteBoundary>} />
           <Route path="/privatelabel" element={<RouteBoundary name="privatelabel"><MarcaPrivataPage /></RouteBoundary>} />
-          <Route path="/prices/own" element={<RouteBoundary name="prices-own"><PreturiOwnKaPage /></RouteBoundary>} />
-          <Route path="/prices/comparative" element={<RouteBoundary name="prices-comparative"><PreturiComparativePage /></RouteBoundary>} />
-          <Route path="/prices/pret3net" element={<RouteBoundary name="prices-pret3net"><Pret3NetPage /></RouteBoundary>} />
-          <Route path="/prices/propuneri" element={<RouteBoundary name="prices-propuneri"><PropuneriKaListarePage /></RouteBoundary>} />
-          <Route path="/prices/ka-retail" element={<RouteBoundary name="prices-ka-retail"><PreturiKaRetailPage /></RouteBoundary>} />
+          <Route path="/prices/own" element={<NoSikadp><RouteBoundary name="prices-own"><PreturiOwnKaPage /></RouteBoundary></NoSikadp>} />
+          <Route path="/prices/comparative" element={<NoSikadp><RouteBoundary name="prices-comparative"><PreturiComparativePage /></RouteBoundary></NoSikadp>} />
+          <Route path="/prices/pret3net" element={<NoSikadp><RouteBoundary name="prices-pret3net"><Pret3NetPage /></RouteBoundary></NoSikadp>} />
+          <Route path="/prices/propuneri" element={<NoSikadp><RouteBoundary name="prices-propuneri"><PropuneriKaListarePage /></RouteBoundary></NoSikadp>} />
+          <Route path="/prices/ka-retail" element={<NoSikadp><RouteBoundary name="prices-ka-retail"><PreturiKaRetailPage /></RouteBoundary></NoSikadp>} />
           <Route path="/forecast" element={<RouteBoundary name="forecast"><PrognozaPage /></RouteBoundary>} />
           <Route path="/settings/upload-adp" element={<RouteBoundary name="settings-upload-adp"><UploadAdpPage /></RouteBoundary>} />
           <Route path="/settings/upload-sika" element={<RouteBoundary name="settings-upload-sika"><UploadSikaPage /></RouteBoundary>} />

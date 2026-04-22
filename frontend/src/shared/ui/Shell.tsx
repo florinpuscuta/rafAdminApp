@@ -158,6 +158,7 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
     { kind: "leaf", to: "/consolidat", label: "Consolidat" },
     { kind: "leaf", to: "/analiza/luni", label: "Analiza pe luni" },
     { kind: "leaf", to: "/analiza/zi", label: "Vz la zi" },
+    { kind: "leaf", to: "/analiza/magazin", label: "Analiza Magazin" },
   ];
   if (scope === "adeplast") {
     analizaChildren.push({
@@ -166,12 +167,20 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
       label: "Comenzi fara IND",
     });
   }
-  analizaChildren.push(
+
+  const preturiChildren: LeafItem[] = [
     { kind: "leaf", to: "/prices/comparative", label: "Preturi Comparative" },
     { kind: "leaf", to: "/prices/own", label: ownLabel },
     { kind: "leaf", to: "/prices/pret3net", label: "Pret 3 Net Comp KA" },
     { kind: "leaf", to: "/prices/propuneri", label: "Propuneri Listare KA" },
-  );
+  ];
+  if (scope === "adeplast") {
+    preturiChildren.push({
+      kind: "leaf",
+      to: "/prices/ka-retail",
+      label: "Preturi KA vs Retail",
+    });
+  }
 
   const tree: NavItem[] = [
     {
@@ -180,6 +189,12 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
       label: "Analiza Vanzari",
       children: analizaChildren,
     },
+    {
+      kind: "parent",
+      id: "preturi",
+      label: "Preturi",
+      children: preturiChildren,
+    },
     { kind: "divider" },
     {
       kind: "parent",
@@ -187,6 +202,7 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
       label: "Grupe Produse",
       children: [
         { kind: "leaf", to: "/grupe-arbore", label: "🌲 Arbore complet" },
+        { kind: "leaf", to: "/grupe-arbore-clienti", label: "🏪 Arbore pe clienți" },
       ],
     },
     {
@@ -218,21 +234,9 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
       { kind: "leaf", to: "/mortar", label: "Mortare Silozuri (Vrac)" },
       { kind: "leaf", to: "/eps", label: "EPS Detalii (Val + Cant)" },
       { kind: "leaf", to: "/privatelabel", label: "Marca Privata" },
-      { kind: "leaf", to: "/prices/ka-retail", label: "Preturi KA vs Retail" },
     );
   }
   tree.push(
-    { kind: "divider" },
-    {
-      kind: "parent",
-      id: "marketing",
-      label: "Marketing",
-      children: [
-        { kind: "leaf", to: "/marketing/dash-face", label: "Dash Face Tracker" },
-        { kind: "leaf", to: "/marketing/facing-config", label: "⚙ Config Concurențe" },
-        { kind: "leaf", to: "/marketing/facing", label: "Facing Tracker" },
-      ],
-    },
     { kind: "divider" },
     {
       kind: "leaf",

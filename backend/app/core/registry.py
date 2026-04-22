@@ -8,6 +8,7 @@ from fastapi import APIRouter
 from app.modules.activitate.router import router as activitate_router
 from app.modules.agents.router import router as agents_router
 from app.modules.ai.router import router as ai_router
+from app.modules.analiza_magazin.router import router as analiza_magazin_router
 from app.modules.analiza_pe_luni.router import router as analiza_pe_luni_router
 from app.modules.app_settings.router import router as app_settings_router
 from app.modules.api_keys.router import router as api_keys_router
@@ -74,6 +75,7 @@ MODULE_ROUTERS: list[APIRouter] = [
     mappings_router,
     vz_la_zi_router,
     analiza_pe_luni_router,
+    analiza_magazin_router,
     comenzi_fara_ind_router,
     # Feature migrations
     grupe_produse_router,
