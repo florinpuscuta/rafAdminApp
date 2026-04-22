@@ -124,3 +124,4 @@ Context de lucru salvat în `~/.claude/projects/C--Users-Florin-apps/memory/`:
 - Deploy workflow (local-only, deploy doar la cerere explicită)
 - Strategia canonical + alias
 - Arhitectură modular monolith (NU microservicii)
+test florin PR
