@@ -120,7 +120,6 @@ async def _run(
     # ── Stage 3: normalize canonicals din Alocare ─────────────────────
     alocare_summary: dict[str, int] = {
         "rows_processed": 0,
-        "agents_created": 0,
         "stores_created": 0,
         "store_aliases_created": 0,
         "agent_aliases_created": 0,
@@ -205,6 +204,22 @@ async def _run(
         source=backfill_source,
     )
 
+    # ── Stage 6c: auto-apply Facturi Bonus de Asignat ─────────────
+    # Regula KA (Leroy/Dedeman/Altex/Hornbach/Bricostore/Puskin + amount
+    # sub threshold) se aplică automat după fiecare import ca să nu
+    # reapară aceleași facturi la fiecare refresh de date. Deciziile
+    # anterioare persistă pe cheia stabilă (tenant, year, month, client,
+    # amount), deci regula rămâne "forever".
+    try:
+        from app.modules.evaluare_agenti import service as evaluare_service
+        facturi_bonus_result = await evaluare_service.apply_facturi_bonus_rule_all(
+            session, tenant_id, reason="auto_rule_on_import",
+        )
+        await session.commit()
+    except Exception as exc:
+        logger.exception("apply_facturi_bonus_rule_all failed: %s", exc)
+        facturi_bonus_result = {"accepted": 0, "skipped": 0, "error": str(exc)[:200]}
+
     unmapped_clients = sum(1 for r in rows if r["client"] not in client_to_store)
     unmapped_agents = sum(
         1 for r in rows
@@ -232,6 +247,7 @@ async def _run(
             "months_affected": months_affected,
             "alocare_rows": alocare_summary["rows_processed"],
             "backfill": str(backfill_result)[:500],
+            "facturi_bonus_auto": str(facturi_bonus_result)[:300],
         },
     )
     await jobs.finish_stage(job_id, "finalize")
@@ -258,11 +274,11 @@ async def _normalize_alocare(
     tenant_id: UUID,
     user_id: UUID,
     alocare_rows: list[dict[str, str]],
-    job_id: UUID,
+    job_id: UUID | None = None,
 ) -> dict[str, int]:
     from sqlalchemy import select
 
-    created_agents = created_stores = 0
+    created_stores = 0
     created_store_aliases = created_agent_aliases = created_assignments = 0
 
     existing_stores = (await session.execute(
@@ -281,15 +297,36 @@ async def _normalize_alocare(
     store_alias_set = set(existing_store_aliases)
 
     existing_agent_aliases = (await session.execute(
-        select(AgentAlias.raw_agent).where(AgentAlias.tenant_id == tenant_id)
-    )).scalars().all()
-    agent_alias_set = set(existing_agent_aliases)
+        select(AgentAlias.raw_agent, AgentAlias.agent_id)
+        .where(AgentAlias.tenant_id == tenant_id)
+    )).all()
+    agent_alias_map: dict[str, UUID] = {raw: aid for raw, aid in existing_agent_aliases}
+    agent_by_id = {a.id: a for a in existing_agents}
 
     existing_assignments = (await session.execute(
         select(AgentStoreAssignment.agent_id, AgentStoreAssignment.store_id)
         .where(AgentStoreAssignment.tenant_id == tenant_id)
     )).all()
     assignment_set = {(a, s) for a, s in existing_assignments}
+
+    # Strict mode: orice nume de agent din sheet-ul Alocare trebuie să existe
+    # deja fie ca Agent.full_name (exact), fie ca AgentAlias.raw_agent. Altfel
+    # abortăm — import-ul nu mai creează orbește agenți noi (sursa fantomelor).
+    unknown_agents = sorted({
+        row["agent_name"] for row in alocare_rows
+        if row["agent_name"] not in agent_by_name
+        and row["agent_name"] not in agent_alias_map
+    })
+    if unknown_agents:
+        raise _ImportAborted(
+            message=(
+                "Nume de agenți necunoscute în sheet-ul Alocare: "
+                + ", ".join(unknown_agents)
+                + ". Adaugă-le ca alias (raw_agent → agent existent) sau "
+                "creează agentul manual în UI înainte de re-import."
+            ),
+            code="unknown_agents",
+        )
 
     total = len(alocare_rows)
     for idx, row in enumerate(alocare_rows, start=1):
@@ -300,11 +337,8 @@ async def _normalize_alocare(
 
         agent = agent_by_name.get(agent_name)
         if agent is None:
-            agent = await agents_service.create_agent(
-                session, tenant_id=tenant_id, full_name=agent_name,
-            )
-            agent_by_name[agent_name] = agent
-            created_agents += 1
+            alias_agent_id = agent_alias_map[agent_name]
+            agent = agent_by_id[alias_agent_id]
 
         store = store_by_name.get(combined_key)
         if store is None:
@@ -324,13 +358,13 @@ async def _normalize_alocare(
             store_alias_set.add(combined_key)
             created_store_aliases += 1
 
-        if agent_name not in agent_alias_set:
+        if agent_name not in agent_alias_map:
             await agents_service.create_alias(
                 session, tenant_id=tenant_id,
                 raw_agent=agent_name, agent_id=agent.id,
                 resolved_by_user_id=user_id,
             )
-            agent_alias_set.add(agent_name)
+            agent_alias_map[agent_name] = agent.id
             created_agent_aliases += 1
 
         assn_key = (agent.id, store.id)
@@ -341,13 +375,11 @@ async def _normalize_alocare(
             assignment_set.add(assn_key)
             created_assignments += 1
 
-        # Raportare progres la fiecare 10 rânduri (Alocare are ~230 rânduri).
-        if idx % 10 == 0 or idx == total:
+        if job_id is not None and (idx % 10 == 0 or idx == total):
             await jobs.update_stage(job_id, "normalize", idx / total * 100)
 
     await session.flush()
     return {
-        "agents_created": created_agents,
         "stores_created": created_stores,
         "store_aliases_created": created_store_aliases,
         "agent_aliases_created": created_agent_aliases,

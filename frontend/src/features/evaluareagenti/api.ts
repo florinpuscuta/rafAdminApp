@@ -1,9 +1,15 @@
 import { apiFetch } from "../../shared/api";
 import type {
+  AgentAnnualResponse,
   AgentCompList,
   AgentCompRow,
   AgentCompUpsert,
-  MatrixResponse,
+  AnnualCostResponse,
+  BonusMagazinAnnualResponse,
+  DashboardResponse,
+  FacturaBonusAcceptResponse,
+  FacturaBonusList,
+  FacturaBonusUnassignResponse,
   MonthInputList,
   MonthInputRow,
   MonthInputUpsert,
@@ -11,6 +17,7 @@ import type {
   RaionBonusList,
   RaionBonusRow,
   RaionBonusUpdate,
+  SalariuBonusAnnualResponse,
   ZonaAgentDetail,
   ZonaAgentsResponse,
   ZonaBonusUpsert,
@@ -115,11 +122,78 @@ export function upsertZonaBonus(
   });
 }
 
-// ─────────── Matricea ───────────
+// ─────────── Analiza costuri anuală ───────────
 
-export function getMatrix(
-  year: number, month: number,
-): Promise<MatrixResponse> {
-  const p = new URLSearchParams({ year: String(year), month: String(month) });
-  return apiFetch<MatrixResponse>(`/api/evaluare-agenti/matrix?${p.toString()}`);
+export function getCostAnnual(year: number): Promise<AnnualCostResponse> {
+  const p = new URLSearchParams({ year: String(year) });
+  return apiFetch<AnnualCostResponse>(`/api/evaluare-agenti/cost-annual?${p.toString()}`);
+}
+
+export function getAgentAnnual(
+  agentId: string, year: number,
+): Promise<AgentAnnualResponse> {
+  const p = new URLSearchParams({ agent_id: agentId, year: String(year) });
+  return apiFetch<AgentAnnualResponse>(`/api/evaluare-agenti/agent-annual?${p.toString()}`);
+}
+
+// ─────────── Dashboard ───────────
+
+export function getDashboard(
+  year: number, months?: number[] | null,
+): Promise<DashboardResponse> {
+  const p = new URLSearchParams({ year: String(year) });
+  if (months && months.length > 0) {
+    for (const m of months) p.append("months", String(m));
+  }
+  return apiFetch<DashboardResponse>(`/api/evaluare-agenti/dashboard?${p.toString()}`);
+}
+
+export function getBonusMagazinAnnual(
+  year: number,
+): Promise<BonusMagazinAnnualResponse> {
+  const p = new URLSearchParams({ year: String(year) });
+  return apiFetch<BonusMagazinAnnualResponse>(
+    `/api/evaluare-agenti/bonus-magazin-annual?${p.toString()}`,
+  );
+}
+
+export function getSalariuBonusAnnual(
+  year: number,
+): Promise<SalariuBonusAnnualResponse> {
+  const p = new URLSearchParams({ year: String(year) });
+  return apiFetch<SalariuBonusAnnualResponse>(
+    `/api/evaluare-agenti/salariu-bonus-annual?${p.toString()}`,
+  );
+}
+
+// ─────────── Facturi Bonus de Asignat ───────────
+
+export function getFacturiBonus(): Promise<FacturaBonusList> {
+  return apiFetch<FacturaBonusList>("/api/evaluare-agenti/facturi-bonus");
+}
+
+export function acceptFacturiBonus(
+  ids: string[],
+): Promise<FacturaBonusAcceptResponse> {
+  return apiFetch<FacturaBonusAcceptResponse>(
+    "/api/evaluare-agenti/facturi-bonus/accept",
+    {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+      headers: { "Content-Type": "application/json" },
+    },
+  );
+}
+
+export function unassignFacturiBonus(
+  ids: string[],
+): Promise<FacturaBonusUnassignResponse> {
+  return apiFetch<FacturaBonusUnassignResponse>(
+    "/api/evaluare-agenti/facturi-bonus/unassign",
+    {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+      headers: { "Content-Type": "application/json" },
+    },
+  );
 }

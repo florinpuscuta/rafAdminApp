@@ -11,6 +11,7 @@ export interface AgentCompRow {
   agentId: string;
   agentName: string;
   salariuFix: string;
+  bonusVanzariEligibil: boolean;
   note: string | null;
   updatedAt: string | null;
 }
@@ -22,6 +23,7 @@ export interface AgentCompList {
 export interface AgentCompUpsert {
   agentId: string;
   salariuFix: string;
+  bonusVanzariEligibil: boolean;
   note: string | null;
 }
 
@@ -38,9 +40,10 @@ export interface MonthInputRow {
   bonusAgent: string;
   bonusRaion: string;
   // editabile (direct RON)
-  costCombustibil: string;
-  costRevizii: string;
-  alteCosturi: string;
+  merchandiserZona: string;
+  cheltuieliAuto: string;
+  alteCheltuieli: string;
+  alteCheltuieliLabel: string | null;
   // computed
   totalCost: string;
   note: string | null;
@@ -56,9 +59,10 @@ export interface MonthInputUpsert {
   agentId: string;
   year: number;
   month: number;
-  costCombustibil: string;
-  costRevizii: string;
-  alteCosturi: string;
+  merchandiserZona: string;
+  cheltuieliAuto: string;
+  alteCheltuieli: string;
+  alteCheltuieliLabel: string | null;
   note: string | null;
 }
 
@@ -146,27 +150,132 @@ export interface RaionBonusUpdate {
   note: string | null;
 }
 
-// ─────────── Matricea ───────────
+// ─────────── Analiza costuri anuală ───────────
 
-export interface MatrixRow {
+export interface AnnualCostRow {
   agentId: string;
   agentName: string;
-  vanzari: string;
-  salariuFix: string;
-  bonusAgent: string;
-  salariuTotal: string;
-  costCombustibil: string;
-  costRevizii: string;
-  alteCosturi: string;
-  bonusRaion: string;
-  totalCost: string;
-  costPer100k: string | null;
+  monthly: string[]; // 12 valori
+  total: string;
 }
 
-export interface MatrixResponse {
+export interface AnnualCostResponse {
+  year: number;
+  rows: AnnualCostRow[];
+  monthTotals: string[]; // 12 valori
+  grandTotal: string;
+}
+
+export interface AgentAnnualMonthRow {
+  month: number;
+  salariuFix: string;
+  bonusAgent: string;
+  merchandiserZona: string;
+  cheltuieliAuto: string;
+  alteCheltuieli: string;
+  bonusRaion: string;
+  total: string;
+}
+
+export interface AgentAnnualResponse {
+  agentId: string;
+  agentName: string;
+  year: number;
+  rows: AgentAnnualMonthRow[];
+  columnTotals: AgentAnnualMonthRow;
+}
+
+// ─────────── Dashboard agenți ───────────
+
+export interface DashboardAgentRow {
+  agentId: string;
+  agentName: string;
+  storeCount: number;
+  vanzari: string;
+  vanzariPrev: string;
+  cheltuieli: string;
+  costPct: string | null;
+  costPer100k: string | null;
+  yoyPct: string | null;
+  bonusAgent: string;
+}
+
+export interface DashboardResponse {
+  year: number;
+  month: number | null;
+  rows: DashboardAgentRow[];
+  grandVanzari: string;
+  grandCheltuieli: string;
+  grandBonusAgent: string;
+  grandStoreCount: number;
+  grandCostPct: string | null;
+}
+
+export interface BonusMagazinAnnualRow {
+  agentId: string;
+  agentName: string;
+  monthly: string[]; // 12 valori
+  total: string;
+}
+
+export interface BonusMagazinAnnualResponse {
+  year: number;
+  rows: BonusMagazinAnnualRow[];
+  monthTotals: string[];
+  grandTotal: string;
+}
+
+export interface SalariuBonusAnnualRow {
+  agentId: string;
+  agentName: string;
+  monthly: string[]; // 12 valori
+  total: string;
+}
+
+export interface SalariuBonusAnnualResponse {
+  year: number;
+  rows: SalariuBonusAnnualRow[];
+  monthTotals: string[];
+  grandTotal: string;
+}
+
+// ─────────── Facturi Bonus de Asignat ───────────
+
+export interface FacturaBonusRow {
+  id: string;
   year: number;
   month: number;
-  rows: MatrixRow[];
-  grandVanzari: string;
-  grandCost: string;
+  amount: string;
+  client: string;
+  chain: string | null;
+  agentId: string | null;
+  agentName: string | null;
+  storeId: string | null;
+  storeName: string | null;
+  suggestedStoreId: string | null;
+  suggestedStoreName: string | null;
+  suggestedAgentId: string | null;
+  suggestedAgentName: string | null;
+  status: "pending" | "assigned";
+  decidedAt: string | null;
+  decisionSource: "auto" | "manual" | null;
+}
+
+export interface FacturaBonusList {
+  rows: FacturaBonusRow[];
+  pendingCount: number;
+  pendingAmount: string;
+  assignedCount: number;
+  assignedAmount: string;
+  threshold: string;
+}
+
+export interface FacturaBonusAcceptResponse {
+  accepted: number;
+  skipped: number;
+}
+
+export interface FacturaBonusUnassignResponse {
+  unassigned: number;
+  skipped: number;
 }

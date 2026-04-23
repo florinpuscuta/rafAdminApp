@@ -44,7 +44,11 @@ import EvaluareHubPage from "./features/evaluareagenti/EvaluareHubPage";
 import SalFixPage from "./features/evaluareagenti/SalFixPage";
 import InputLunarAgentPage from "./features/evaluareagenti/InputLunarAgentPage";
 import ZonaAgentPage from "./features/evaluareagenti/ZonaAgentPage";
-import MatriceaAgentiPage from "./features/evaluareagenti/MatriceaAgentiPage";
+import AgentAnualPage from "./features/evaluareagenti/AgentAnualPage";
+import CostAnualPage from "./features/evaluareagenti/CostAnualPage";
+import DashboardAgentiPage from "./features/evaluareagenti/DashboardAgentiPage";
+import PodiumAgentiPage from "./features/evaluareagenti/PodiumAgentiPage";
+import FacturiBonusAsignatPage from "./features/evaluareagenti/FacturiBonusAsignatPage";
 import ComenziFaraIndPage from "./features/comenzifaraind/ComenziFaraIndPage";
 import GrupeProdusePage from "./features/grupeproduse/GrupeProdusePage";
 import ArboreProdusePage from "./features/arboreproduse/ArboreProdusePage";
@@ -236,9 +240,11 @@ function AuthedShell() {
           <Route path="/evaluare/sal-fix" element={<SikadpOnly><RouteBoundary name="evaluare-sal-fix"><SalFixPage /></RouteBoundary></SikadpOnly>} />
           <Route path="/evaluare/input-lunar" element={<SikadpOnly><RouteBoundary name="evaluare-input"><InputLunarAgentPage /></RouteBoundary></SikadpOnly>} />
           <Route path="/evaluare/zona-agent" element={<SikadpOnly><RouteBoundary name="evaluare-zona-agent"><ZonaAgentPage /></RouteBoundary></SikadpOnly>} />
-          <Route path="/evaluare/matricea" element={<SikadpOnly><RouteBoundary name="evaluare-matricea"><MatriceaAgentiPage /></RouteBoundary></SikadpOnly>} />
-          <Route path="/evaluare/zona-detaliu" element={<SikadpOnly><RouteBoundary name="evaluare-zona-detaliu"><ComingSoonPage title="Detaliu Zonă" /></RouteBoundary></SikadpOnly>} />
-          <Route path="/evaluare/zona-ranking" element={<SikadpOnly><RouteBoundary name="evaluare-zona-ranking"><ComingSoonPage title="Ranking Zone" /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/cost-anual" element={<SikadpOnly><RouteBoundary name="evaluare-cost-anual"><CostAnualPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/agent-anual" element={<SikadpOnly><RouteBoundary name="evaluare-agent-anual"><AgentAnualPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/dashboard" element={<SikadpOnly><RouteBoundary name="evaluare-dashboard"><DashboardAgentiPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/podium" element={<SikadpOnly><RouteBoundary name="evaluare-podium"><PodiumAgentiPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/facturi-bonus" element={<SikadpOnly><RouteBoundary name="evaluare-facturi-bonus"><FacturiBonusAsignatPage /></RouteBoundary></SikadpOnly>} />
         </Routes>
       </Shell>
     </>

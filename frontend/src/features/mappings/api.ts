@@ -31,7 +31,6 @@ export interface IngestResponse {
   summary: {
     rowsProcessed: number;
     storesCreated: number;
-    agentsCreated: number;
     mappingsCreated: number;
     mappingsUpdated: number;
   };

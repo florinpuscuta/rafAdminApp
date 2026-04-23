@@ -25,11 +25,6 @@ function toNum(s: string | number | null | undefined): number {
 function fmtRo(n: number): string {
   return new Intl.NumberFormat("ro-RO", { maximumFractionDigits: 0 }).format(n);
 }
-function fmtM(n: number): string {
-  const m = n / 1_000_000;
-  const sign = m < 0 ? "-" : "";
-  return `${sign}${Math.abs(m).toFixed(2)} M`;
-}
 function fmtPct(n: number): string {
   const sign = n > 0 ? "+" : "";
   return `${sign}${n.toFixed(1)}%`;
@@ -261,7 +256,7 @@ function IndBanner({
         {pAmt > 0 && (
           <>
             {" · "}
-            <strong>{fmtM(pAmt)} RON</strong>
+            <strong>{fmtRo(pAmt)} RON</strong>
           </>
         )}
       </span>
@@ -273,7 +268,7 @@ function IndBanner({
             {mAmt > 0 && (
               <>
                 {" · "}
-                <strong>{fmtM(mAmt)} RON</strong>
+                <strong>{fmtRo(mAmt)} RON</strong>
               </>
             )}
           </span>
@@ -297,26 +292,26 @@ function AdpKpis({ kpis, yearPrev, yearCurr }: { kpis: VzKpis; yearPrev: number;
   const realizat = pctRealizat(ex, prev);
   return (
     <div style={styles.kpiRow}>
-      <KpiCard label={`LUNA ANTERIOARĂ (${yearPrev})`} value={fmtM(prev)} sub="RON" muted />
+      <KpiCard label={`LUNA ANTERIOARĂ (${yearPrev})`} value={fmtRo(prev)} sub="RON" muted />
       <KpiCard
         label={`VÂNZĂRI CURENTE (${yearCurr})`}
-        value={fmtM(curr)}
+        value={fmtRo(curr)}
         sub={fmtPct(deltaCurr)}
         valueColor="var(--cyan)"
         subColor={deltaCurr < 0 ? "var(--red)" : "var(--green)"}
       />
-      <KpiCard label="NELIVRATE" value={fmtM(nel)} sub="RON" valueColor="var(--orange)" />
-      <KpiCard label="NEFACTURATE" value={fmtM(nef)} sub="RON" valueColor="var(--orange)" />
+      <KpiCard label="NELIVRATE" value={fmtRo(nel)} sub="RON" valueColor="var(--orange)" />
+      <KpiCard label="NEFACTURATE" value={fmtRo(nef)} sub="RON" valueColor="var(--orange)" />
       <KpiCard
         label="EXERCIȚIU (V+N+NF)"
-        value={fmtM(ex)}
+        value={fmtRo(ex)}
         sub={`realizat: ${realizat.toFixed(1)}%`}
         valueColor={colorForPct(realizat)}
         subColor={colorForPct(realizat)}
       />
       <KpiCard
         label={gap >= 0 ? "DEPĂȘIT" : "GAP DE ACOPERIT"}
-        value={fmtM(Math.abs(gap))}
+        value={fmtRo(Math.abs(gap))}
         sub="RON"
         valueColor={gap >= 0 ? "var(--green)" : "var(--red)"}
       />
@@ -334,25 +329,25 @@ function SikaKpis({ kpis, yearPrev, yearCurr }: { kpis: VzKpis; yearPrev: number
   const realizat = pctRealizat(ex, prev);
   return (
     <div style={styles.kpiRow}>
-      <KpiCard label={`LUNA ANTERIOARĂ (${yearPrev})`} value={fmtM(prev)} sub="RON" muted />
+      <KpiCard label={`LUNA ANTERIOARĂ (${yearPrev})`} value={fmtRo(prev)} sub="RON" muted />
       <KpiCard
         label={`VÂNZĂRI CURENTE (${yearCurr})`}
-        value={fmtM(curr)}
+        value={fmtRo(curr)}
         sub={fmtPct(deltaCurr)}
         valueColor="var(--cyan)"
         subColor={deltaCurr < 0 ? "var(--red)" : "var(--green)"}
       />
-      <KpiCard label="COMENZI DESCHISE" value={fmtM(ord)} sub="RON" valueColor="var(--orange)" />
+      <KpiCard label="COMENZI DESCHISE" value={fmtRo(ord)} sub="RON" valueColor="var(--orange)" />
       <KpiCard
         label="EXERCIȚIU (V+C)"
-        value={fmtM(ex)}
+        value={fmtRo(ex)}
         sub={`realizat: ${realizat.toFixed(1)}%`}
         valueColor={colorForPct(realizat)}
         subColor={colorForPct(realizat)}
       />
       <KpiCard
         label={gap >= 0 ? "DEPĂȘIT" : "GAP DE ACOPERIT"}
-        value={fmtM(Math.abs(gap))}
+        value={fmtRo(Math.abs(gap))}
         sub="RON"
         valueColor={gap >= 0 ? "var(--green)" : "var(--red)"}
       />

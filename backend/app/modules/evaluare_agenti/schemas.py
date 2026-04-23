@@ -13,6 +13,7 @@ class AgentCompRow(APISchema):
     agent_id: UUID
     agent_name: str
     salariu_fix: Decimal = Field(default=Decimal("0"))
+    bonus_vanzari_eligibil: bool = True
     note: str | None = None
     updated_at: datetime | None = None
 
@@ -24,6 +25,7 @@ class AgentCompList(APISchema):
 class AgentCompUpsert(APISchema):
     agent_id: UUID
     salariu_fix: Decimal = Field(default=Decimal("0"))
+    bonus_vanzari_eligibil: bool = True
     note: str | None = None
 
 
@@ -40,9 +42,10 @@ class MonthInputRow(APISchema):
     bonus_agent: Decimal = Field(default=Decimal("0"))
     bonus_raion: Decimal = Field(default=Decimal("0"))
     # Editabile (direct RON)
-    cost_combustibil: Decimal = Field(default=Decimal("0"))
-    cost_revizii: Decimal = Field(default=Decimal("0"))
-    alte_costuri: Decimal = Field(default=Decimal("0"))
+    merchandiser_zona: Decimal = Field(default=Decimal("0"))
+    cheltuieli_auto: Decimal = Field(default=Decimal("0"))
+    alte_cheltuieli: Decimal = Field(default=Decimal("0"))
+    alte_cheltuieli_label: str | None = None
     # Computed
     total_cost: Decimal = Field(default=Decimal("0"))
     note: str | None = None
@@ -58,9 +61,10 @@ class MonthInputUpsert(APISchema):
     agent_id: UUID
     year: int
     month: int
-    cost_combustibil: Decimal = Field(default=Decimal("0"))
-    cost_revizii: Decimal = Field(default=Decimal("0"))
-    alte_costuri: Decimal = Field(default=Decimal("0"))
+    merchandiser_zona: Decimal = Field(default=Decimal("0"))
+    cheltuieli_auto: Decimal = Field(default=Decimal("0"))
+    alte_cheltuieli: Decimal = Field(default=Decimal("0"))
+    alte_cheltuieli_label: str | None = None
     note: str | None = None
 
 
@@ -148,26 +152,142 @@ class RaionBonusUpdate(APISchema):
     note: str | None = None
 
 
-# ───────────────── Matricea Agenți ─────────────────
+# ───────────────── Analiza costuri anuală ─────────────────
 
-class MatrixRow(APISchema):
+class AnnualCostRow(APISchema):
     agent_id: UUID
     agent_name: str
-    vanzari: Decimal = Field(default=Decimal("0"))
+    monthly: list[Decimal] = Field(default_factory=list)
+    total: Decimal = Field(default=Decimal("0"))
+
+
+class AnnualCostResponse(APISchema):
+    year: int
+    rows: list[AnnualCostRow] = Field(default_factory=list)
+    month_totals: list[Decimal] = Field(default_factory=list)
+    grand_total: Decimal = Field(default=Decimal("0"))
+
+
+class AgentAnnualMonthRow(APISchema):
+    month: int
     salariu_fix: Decimal = Field(default=Decimal("0"))
     bonus_agent: Decimal = Field(default=Decimal("0"))
-    salariu_total: Decimal = Field(default=Decimal("0"))
-    cost_combustibil: Decimal = Field(default=Decimal("0"))
-    cost_revizii: Decimal = Field(default=Decimal("0"))
-    alte_costuri: Decimal = Field(default=Decimal("0"))
+    merchandiser_zona: Decimal = Field(default=Decimal("0"))
+    cheltuieli_auto: Decimal = Field(default=Decimal("0"))
+    alte_cheltuieli: Decimal = Field(default=Decimal("0"))
     bonus_raion: Decimal = Field(default=Decimal("0"))
-    total_cost: Decimal = Field(default=Decimal("0"))
+    total: Decimal = Field(default=Decimal("0"))
+
+
+class AgentAnnualResponse(APISchema):
+    agent_id: UUID
+    agent_name: str
+    year: int
+    rows: list[AgentAnnualMonthRow] = Field(default_factory=list)
+    column_totals: AgentAnnualMonthRow
+
+
+# ───────────────── Dashboard agenți ─────────────────
+
+class DashboardAgentRow(APISchema):
+    agent_id: UUID
+    agent_name: str
+    store_count: int = 0
+    vanzari: Decimal = Field(default=Decimal("0"))
+    vanzari_prev: Decimal = Field(default=Decimal("0"))
+    cheltuieli: Decimal = Field(default=Decimal("0"))
+    cost_pct: Decimal | None = None
     cost_per_100k: Decimal | None = None
+    yoy_pct: Decimal | None = None
+    bonus_agent: Decimal = Field(default=Decimal("0"))
 
 
-class MatrixResponse(APISchema):
+class DashboardResponse(APISchema):
+    year: int
+    month: int | None = None
+    rows: list[DashboardAgentRow] = Field(default_factory=list)
+    grand_vanzari: Decimal = Field(default=Decimal("0"))
+    grand_cheltuieli: Decimal = Field(default=Decimal("0"))
+    grand_bonus_agent: Decimal = Field(default=Decimal("0"))
+    grand_store_count: int = 0
+    grand_cost_pct: Decimal | None = None
+
+
+class BonusMagazinAnnualRow(APISchema):
+    agent_id: UUID
+    agent_name: str
+    monthly: list[Decimal] = Field(default_factory=list)
+    total: Decimal = Field(default=Decimal("0"))
+
+
+class BonusMagazinAnnualResponse(APISchema):
+    year: int
+    rows: list[BonusMagazinAnnualRow] = Field(default_factory=list)
+    month_totals: list[Decimal] = Field(default_factory=list)
+    grand_total: Decimal = Field(default=Decimal("0"))
+
+
+class SalariuBonusAnnualRow(APISchema):
+    agent_id: UUID
+    agent_name: str
+    monthly: list[Decimal] = Field(default_factory=list)
+    total: Decimal = Field(default=Decimal("0"))
+
+
+class SalariuBonusAnnualResponse(APISchema):
+    year: int
+    rows: list[SalariuBonusAnnualRow] = Field(default_factory=list)
+    month_totals: list[Decimal] = Field(default_factory=list)
+    grand_total: Decimal = Field(default=Decimal("0"))
+
+
+# ───────────────── Facturi Bonus de Asignat ─────────────────
+
+class FacturaBonusRow(APISchema):
+    id: UUID
     year: int
     month: int
-    rows: list[MatrixRow] = Field(default_factory=list)
-    grand_vanzari: Decimal = Field(default=Decimal("0"))
-    grand_cost: Decimal = Field(default=Decimal("0"))
+    amount: Decimal
+    client: str
+    chain: str | None = None
+    # Starea curentă a rândului în raw_sales
+    agent_id: UUID | None = None
+    agent_name: str | None = None
+    store_id: UUID | None = None
+    store_name: str | None = None
+    # Sugestia (target) pentru reasignare
+    suggested_store_id: UUID | None = None
+    suggested_store_name: str | None = None
+    suggested_agent_id: UUID | None = None
+    suggested_agent_name: str | None = None
+    # Status: "pending" (roșu, de asignat) sau "assigned" (verde, deja decis)
+    status: str = "pending"
+    decided_at: datetime | None = None
+    decision_source: str | None = None  # "auto" / "manual" / None dacă pending
+
+
+class FacturaBonusList(APISchema):
+    rows: list[FacturaBonusRow] = Field(default_factory=list)
+    pending_count: int = 0
+    pending_amount: Decimal = Field(default=Decimal("0"))
+    assigned_count: int = 0
+    assigned_amount: Decimal = Field(default=Decimal("0"))
+    threshold: Decimal = Field(default=Decimal("-20000"))
+
+
+class FacturaBonusAcceptRequest(APISchema):
+    ids: list[UUID]
+
+
+class FacturaBonusAcceptResponse(APISchema):
+    accepted: int
+    skipped: int
+
+
+class FacturaBonusUnassignRequest(APISchema):
+    ids: list[UUID]
+
+
+class FacturaBonusUnassignResponse(APISchema):
+    unassigned: int
+    skipped: int

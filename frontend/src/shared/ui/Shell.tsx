@@ -136,9 +136,11 @@ function buildSikadpTree(): NavItem[] {
       id: "evaluare-analiza",
       label: "Evaluare · Analiza",
       children: [
-        { kind: "leaf", to: "/evaluare/matricea", label: "Matricea Agenți" },
-        { kind: "leaf", to: "/evaluare/zona-detaliu", label: "Detaliu Zonă" },
-        { kind: "leaf", to: "/evaluare/zona-ranking", label: "Ranking Zone" },
+        { kind: "leaf", to: "/evaluare/dashboard", label: "Dashboard agenți" },
+        { kind: "leaf", to: "/evaluare/podium", label: "Podium agenți", labelColor: "#d4af37" },
+        { kind: "leaf", to: "/evaluare/facturi-bonus", label: "Facturi bonus de asignat" },
+        { kind: "leaf", to: "/evaluare/cost-anual", label: "Analiza costuri zona an" },
+        { kind: "leaf", to: "/evaluare/agent-anual", label: "Analiza anuală pe agent" },
       ],
     },
     { kind: "divider" },
@@ -694,10 +696,10 @@ function LeafLink({
             : "3px solid transparent",
           fontWeight: isActive ? 600 : child ? 400 : 600,
         };
-        const color = isActive
-          ? "var(--cyan)"
-          : labelColor
-            ? labelColor
+        const color = labelColor
+          ? labelColor
+          : isActive
+            ? "var(--cyan)"
             : child
               ? "var(--muted)"
               : "var(--text)";

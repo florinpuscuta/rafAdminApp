@@ -74,9 +74,15 @@ async def upload_mapping(
             detail={"code": "parse_error", "message": str(e)},
         )
 
-    summary = await service.ingest_mapping_rows(
-        session, current_user.tenant_id, rows,
-    )
+    try:
+        summary = await service.ingest_mapping_rows(
+            session, current_user.tenant_id, rows,
+        )
+    except service.UnknownAgentError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={"code": "unknown_agent", "message": str(e)},
+        )
     backfill = await service.backfill_raw_sales(
         session, current_user.tenant_id, source="ADP",
     )
@@ -107,9 +113,15 @@ async def create_mapping(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    m = await service.create_mapping(
-        session, current_user.tenant_id, payload.model_dump(),
-    )
+    try:
+        m = await service.create_mapping(
+            session, current_user.tenant_id, payload.model_dump(),
+        )
+    except service.UnknownAgentError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={"code": "unknown_agent", "message": str(e)},
+        )
     backfill = await service.backfill_raw_sales(
         session, current_user.tenant_id, source=m.source,
     )
@@ -138,10 +150,16 @@ async def update_mapping(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
-    m = await service.update_mapping(
-        session, current_user.tenant_id, mapping_id,
-        payload.model_dump(exclude_unset=True),
-    )
+    try:
+        m = await service.update_mapping(
+            session, current_user.tenant_id, mapping_id,
+            payload.model_dump(exclude_unset=True),
+        )
+    except service.UnknownAgentError as e:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={"code": "unknown_agent", "message": str(e)},
+        )
     if m is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Mapping inexistent")
     backfill = await service.backfill_raw_sales(

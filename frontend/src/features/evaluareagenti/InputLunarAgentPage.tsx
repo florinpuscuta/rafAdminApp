@@ -56,9 +56,9 @@ export default function InputLunarAgentPage() {
     return (
       toNum(src.salariuFix)
       + toNum(src.bonusAgent)
-      + toNum(src.costCombustibil)
-      + toNum(src.costRevizii)
-      + toNum(src.alteCosturi)
+      + toNum(src.merchandiserZona)
+      + toNum(src.cheltuieliAuto)
+      + toNum(src.alteCheltuieli)
       + toNum(src.bonusRaion)
     );
   };
@@ -73,9 +73,10 @@ export default function InputLunarAgentPage() {
         agentId: row.agentId,
         year: row.year,
         month: row.month,
-        costCombustibil: row.costCombustibil || "0",
-        costRevizii: row.costRevizii || "0",
-        alteCosturi: row.alteCosturi || "0",
+        merchandiserZona: row.merchandiserZona || "0",
+        cheltuieliAuto: row.cheltuieliAuto || "0",
+        alteCheltuieli: row.alteCheltuieli || "0",
+        alteCheltuieliLabel: row.alteCheltuieliLabel,
         note: row.note,
       });
       setRows((prev) => prev.map((r) => (r.agentId === agentId ? updated : r)));
@@ -103,15 +104,15 @@ export default function InputLunarAgentPage() {
     acc.vanzari += toNum(src.vanzari);
     acc.salariuFix += toNum(src.salariuFix);
     acc.bonusAgent += toNum(src.bonusAgent);
-    acc.costCombustibil += toNum(src.costCombustibil);
-    acc.costRevizii += toNum(src.costRevizii);
-    acc.alteCosturi += toNum(src.alteCosturi);
+    acc.merchandiserZona += toNum(src.merchandiserZona);
+    acc.cheltuieliAuto += toNum(src.cheltuieliAuto);
+    acc.alteCheltuieli += toNum(src.alteCheltuieli);
     acc.bonusRaion += toNum(src.bonusRaion);
     acc.total += previewTotal(r);
     return acc;
   }, {
-    vanzari: 0, salariuFix: 0, bonusAgent: 0, costCombustibil: 0,
-    costRevizii: 0, alteCosturi: 0, bonusRaion: 0, total: 0,
+    vanzari: 0, salariuFix: 0, bonusAgent: 0, merchandiserZona: 0,
+    cheltuieliAuto: 0, alteCheltuieli: 0, bonusRaion: 0, total: 0,
   });
 
   return (
@@ -147,12 +148,12 @@ export default function InputLunarAgentPage() {
                 <th style={styles.th}>Vânzări</th>
                 <th style={styles.th}>Sal. fix</th>
                 <th style={styles.th}>Bonus</th>
-                <th style={styles.th}>Combustibil</th>
-                <th style={styles.th}>Revizii</th>
-                <th style={styles.th}>Alte costuri</th>
+                <th style={styles.th}>Merchandiser zonă</th>
+                <th style={styles.th}>Cheltuieli auto</th>
+                <th style={styles.th}>Alte cheltuieli</th>
+                <th style={styles.thLeft}>Etichetă</th>
                 <th style={styles.th}>Bonus zonă</th>
                 <th style={styles.th}>TOTAL</th>
-                <th style={styles.thLeft}>Note</th>
                 <th style={styles.th}></th>
               </tr>
             </thead>
@@ -172,8 +173,8 @@ export default function InputLunarAgentPage() {
                         data-raw="true"
                         type="number" step="0.01"
                         style={styles.inpNum}
-                        value={valueOf(r, "costCombustibil")}
-                        onChange={(e) => patch(r.agentId, "costCombustibil", e.target.value)}
+                        value={valueOf(r, "merchandiserZona")}
+                        onChange={(e) => patch(r.agentId, "merchandiserZona", e.target.value)}
                       />
                     </td>
                     <td style={styles.td}>
@@ -181,8 +182,8 @@ export default function InputLunarAgentPage() {
                         data-raw="true"
                         type="number" step="0.01"
                         style={styles.inpNum}
-                        value={valueOf(r, "costRevizii")}
-                        onChange={(e) => patch(r.agentId, "costRevizii", e.target.value)}
+                        value={valueOf(r, "cheltuieliAuto")}
+                        onChange={(e) => patch(r.agentId, "cheltuieliAuto", e.target.value)}
                       />
                     </td>
                     <td style={styles.td}>
@@ -190,23 +191,23 @@ export default function InputLunarAgentPage() {
                         data-raw="true"
                         type="number" step="0.01"
                         style={styles.inpNum}
-                        value={valueOf(r, "alteCosturi")}
-                        onChange={(e) => patch(r.agentId, "alteCosturi", e.target.value)}
+                        value={valueOf(r, "alteCheltuieli")}
+                        onChange={(e) => patch(r.agentId, "alteCheltuieli", e.target.value)}
                       />
-                    </td>
-                    <td style={styles.tdRoRight}>{fmtRo(toNum(r.bonusRaion), 0)}</td>
-                    <td style={{ ...styles.td, fontWeight: 700, color: "var(--cyan)" }}>
-                      {fmtRo(total, 0)}
                     </td>
                     <td style={styles.tdLeft}>
                       <input
                         data-raw="true"
                         type="text"
-                        style={styles.inpText}
-                        value={valueOf(r, "note")}
-                        onChange={(e) => patch(r.agentId, "note", e.target.value)}
-                        placeholder="—"
+                        style={styles.inpLabel}
+                        value={valueOf(r, "alteCheltuieliLabel")}
+                        onChange={(e) => patch(r.agentId, "alteCheltuieliLabel", e.target.value)}
+                        placeholder="ex: Cadouri"
                       />
+                    </td>
+                    <td style={styles.tdRoRight}>{fmtRo(toNum(r.bonusRaion), 0)}</td>
+                    <td style={{ ...styles.td, fontWeight: 700, color: "var(--cyan)" }}>
+                      {fmtRo(total, 0)}
                     </td>
                     <td style={styles.td}>
                       <button
@@ -230,12 +231,13 @@ export default function InputLunarAgentPage() {
                 <td style={styles.tdTotalNum}>{fmtRo(totals.vanzari, 0)}</td>
                 <td style={styles.tdTotalNum}>{fmtRo(totals.salariuFix, 0)}</td>
                 <td style={styles.tdTotalNum}>{fmtRo(totals.bonusAgent, 0)}</td>
-                <td style={styles.tdTotalNum}>{fmtRo(totals.costCombustibil, 0)}</td>
-                <td style={styles.tdTotalNum}>{fmtRo(totals.costRevizii, 0)}</td>
-                <td style={styles.tdTotalNum}>{fmtRo(totals.alteCosturi, 0)}</td>
+                <td style={styles.tdTotalNum}>{fmtRo(totals.merchandiserZona, 0)}</td>
+                <td style={styles.tdTotalNum}>{fmtRo(totals.cheltuieliAuto, 0)}</td>
+                <td style={styles.tdTotalNum}>{fmtRo(totals.alteCheltuieli, 0)}</td>
+                <td style={styles.tdTotal}></td>
                 <td style={styles.tdTotalNum}>{fmtRo(totals.bonusRaion, 0)}</td>
                 <td style={styles.tdTotalNum}>{fmtRo(totals.total, 0)}</td>
-                <td style={styles.tdTotal} colSpan={2}></td>
+                <td style={styles.tdTotal}></td>
               </tr>
             </tbody>
           </table>
@@ -246,24 +248,24 @@ export default function InputLunarAgentPage() {
 }
 
 const styles: Record<string, CSSProperties> = {
-  wrap: { padding: "16px 8px", maxWidth: 1700 },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 12, flexWrap: "wrap" },
-  title: { fontSize: 20, fontWeight: 700, color: "var(--cyan)", margin: "0 0 4px" },
-  lead: { color: "var(--muted)", fontSize: 12, margin: 0, maxWidth: 700, lineHeight: 1.5 },
+  wrap: { padding: "12px 8px", width: "100%" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, marginBottom: 10, flexWrap: "wrap" },
+  title: { fontSize: 18, fontWeight: 700, color: "var(--cyan)", margin: "0 0 2px" },
+  lead: { color: "var(--muted)", fontSize: 11, margin: 0, maxWidth: 720, lineHeight: 1.4 },
   muted: { color: "var(--muted)", fontSize: 13, padding: "24px 0" },
-  error: { padding: "8px 12px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.4)", color: "#fca5a5", borderRadius: 6, fontSize: 12, margin: "8px 0" },
-  flash: { padding: "8px 12px", background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.4)", color: "#86efac", borderRadius: 6, fontSize: 12, margin: "8px 0" },
-  tableWrap: { background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 8, overflow: "auto" },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 13 },
-  th: { padding: "10px 8px", textAlign: "right", fontSize: 11, fontWeight: 600, color: "var(--muted)", borderBottom: "1px solid var(--border)", background: "var(--bg-sidebar)", whiteSpace: "nowrap" },
-  thLeft: { padding: "10px 12px", textAlign: "left", fontSize: 11, fontWeight: 600, color: "var(--muted)", borderBottom: "1px solid var(--border)", background: "var(--bg-sidebar)", whiteSpace: "nowrap" },
-  td: { padding: "6px 8px", textAlign: "right", borderBottom: "1px solid var(--border)", fontVariantNumeric: "tabular-nums" },
-  tdRoRight: { padding: "6px 8px", textAlign: "right", borderBottom: "1px solid var(--border)", fontVariantNumeric: "tabular-nums", color: "var(--muted)" },
-  tdLeft: { padding: "6px 12px", textAlign: "left", borderBottom: "1px solid var(--border)" },
+  error: { padding: "6px 10px", background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.4)", color: "#fca5a5", borderRadius: 6, fontSize: 12, margin: "6px 0" },
+  flash: { padding: "6px 10px", background: "rgba(34,197,94,0.1)", border: "1px solid rgba(34,197,94,0.4)", color: "#86efac", borderRadius: 6, fontSize: 12, margin: "6px 0" },
+  tableWrap: { background: "var(--bg-panel)", border: "1px solid var(--border)", borderRadius: 8, overflow: "hidden" },
+  table: { width: "100%", borderCollapse: "collapse", fontSize: 12, tableLayout: "auto" },
+  th: { padding: "8px 4px", textAlign: "right", fontSize: 10, fontWeight: 600, color: "var(--muted)", borderBottom: "1px solid var(--border)", background: "var(--bg-sidebar)", whiteSpace: "nowrap" },
+  thLeft: { padding: "8px 8px", textAlign: "left", fontSize: 10, fontWeight: 600, color: "var(--muted)", borderBottom: "1px solid var(--border)", background: "var(--bg-sidebar)", whiteSpace: "nowrap" },
+  td: { padding: "4px 4px", textAlign: "right", borderBottom: "1px solid var(--border)", fontVariantNumeric: "tabular-nums" },
+  tdRoRight: { padding: "4px 4px", textAlign: "right", borderBottom: "1px solid var(--border)", fontVariantNumeric: "tabular-nums", color: "var(--muted)" },
+  tdLeft: { padding: "4px 8px", textAlign: "left", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" },
   rowDirty: { background: "rgba(234,179,8,0.06)" },
-  inpNum: { width: 100, padding: "4px 6px", textAlign: "right", fontSize: 13, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 4, fontVariantNumeric: "tabular-nums" },
-  inpText: { width: "100%", minWidth: 120, padding: "4px 6px", fontSize: 13, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 4 },
-  saveBtn: { padding: "6px 14px", fontSize: 12, fontWeight: 600, background: "var(--cyan)", color: "#000", border: "none", borderRadius: 4, minWidth: 90 },
-  tdTotal: { padding: "10px 12px", background: "var(--bg-sidebar)", fontWeight: 700, color: "var(--cyan)", borderTop: "2px solid var(--border)" },
-  tdTotalNum: { padding: "10px 8px", background: "var(--bg-sidebar)", fontWeight: 700, color: "var(--cyan)", textAlign: "right", fontVariantNumeric: "tabular-nums", borderTop: "2px solid var(--border)" },
+  inpNum: { width: "100%", maxWidth: 80, minWidth: 0, padding: "3px 4px", textAlign: "right", fontSize: 12, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 4, fontVariantNumeric: "tabular-nums", boxSizing: "border-box" },
+  inpLabel: { width: "100%", maxWidth: 110, minWidth: 0, padding: "3px 4px", fontSize: 11, background: "var(--bg)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 4, boxSizing: "border-box" },
+  saveBtn: { padding: "4px 10px", fontSize: 11, fontWeight: 600, background: "var(--cyan)", color: "#000", border: "none", borderRadius: 4, minWidth: 72 },
+  tdTotal: { padding: "8px 8px", background: "var(--bg-sidebar)", fontWeight: 700, color: "var(--cyan)", borderTop: "2px solid var(--border)" },
+  tdTotalNum: { padding: "8px 4px", background: "var(--bg-sidebar)", fontWeight: 700, color: "var(--cyan)", textAlign: "right", fontVariantNumeric: "tabular-nums", borderTop: "2px solid var(--border)" },
 };

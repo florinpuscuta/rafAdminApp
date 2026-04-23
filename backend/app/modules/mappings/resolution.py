@@ -50,20 +50,33 @@ async def client_sam_map(
     session: AsyncSession,
     tenant_id: UUID,
 ) -> dict[str, tuple[UUID | None, UUID | None]]:
-    """Lookup: cheie normalizată → (agent_id, canonical_store_id) din SAM."""
+    """Lookup: cheie normalizată → (agent_id, canonical_store_id) din SAM.
+
+    Indexează după DOUĂ chei — amândouă pot match raw.client:
+      1. `client_original | ship_to_original` (raw, ex. ADP: 'DEDEMAN SRL | SUCEAVA23')
+      2. `client_original | cheie_finala`     (canonical, ex. Sika: 'DEDEMAN SRL | DEDEMAN SUCEAVA 23')
+
+    Astfel un rând raw_orders Sika cu `client='DEDEMAN SRL | DEDEMAN SUCEAVA 23'`
+    se rezolvă via entry-ul ADP care are `cheie_finala='DEDEMAN SUCEAVA 23'`,
+    fără să duplicăm SAM per sursă.
+    """
     rows = (await session.execute(
         select(
             StoreAgentMapping.client_original,
             StoreAgentMapping.ship_to_original,
+            StoreAgentMapping.cheie_finala,
             StoreAgentMapping.agent_id,
             StoreAgentMapping.store_id,
         ).where(StoreAgentMapping.tenant_id == tenant_id)
     )).all()
     out: dict[str, tuple[UUID | None, UUID | None]] = {}
-    for co, sto, agent_id, store_id in rows:
-        key = norm_client_key(co, sto)
-        if key:
-            out.setdefault(key, (agent_id, store_id))
+    for co, sto, cheie, agent_id, store_id in rows:
+        ship_key = norm_client_key(co, sto)
+        if ship_key:
+            out.setdefault(ship_key, (agent_id, store_id))
+        cheie_key = norm_client_key(co, cheie)
+        if cheie_key:
+            out.setdefault(cheie_key, (agent_id, store_id))
     return out
 
 

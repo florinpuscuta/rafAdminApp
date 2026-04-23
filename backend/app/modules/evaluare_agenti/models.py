@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -10,6 +11,7 @@ from sqlalchemy import (
     String,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -44,6 +46,9 @@ class AgentCompensation(Base):
         index=True,
     )
     salariu_fix: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    bonus_vanzari_eligibil: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     telefon_flat: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     diurna_flat: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
     consum_l_100km: Mapped[Decimal] = mapped_column(Numeric(6, 2), nullable=False, default=0)
@@ -61,9 +66,9 @@ class AgentMonthInput(Base):
     """Input lunar per agent: costurile variabile introduse manual în RON.
 
     Unique (tenant, agent, year, month) — o singură înregistrare per lună.
-    Toate costurile (combustibil, revizii, alte) se introduc direct ca sume
-    în RON. `km` și `pret_carburant_ron_l_snapshot` sunt legacy (nefolosite
-    de logica curentă — păstrate doar pentru compatibilitate DB).
+    Toate costurile (merchandiser, auto, alte cheltuieli) se introduc direct
+    ca sume în RON. `alte_cheltuieli_label` e text liber pentru eticheta
+    cheltuielii diverse. `km` și `pret_carburant_ron_l_snapshot` sunt legacy.
     """
 
     __tablename__ = "agent_month_inputs"
@@ -90,9 +95,10 @@ class AgentMonthInput(Base):
     year: Mapped[int] = mapped_column(Integer, nullable=False)
     month: Mapped[int] = mapped_column(Integer, nullable=False)
     # Costuri lunare directe (RON) — introduse manual
-    cost_combustibil_ron: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    cost_revizii_ron: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
-    alte_costuri_ron: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    merchandiser_zona_ron: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    cheltuieli_auto_ron: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    alte_cheltuieli_ron: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False, default=0)
+    alte_cheltuieli_label: Mapped[str | None] = mapped_column(String(100), nullable=True)
     # Legacy (unused) — păstrate ca să nu rupem schema existentă
     km: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False, default=0)
     pret_carburant_ron_l_snapshot: Mapped[Decimal | None] = mapped_column(
@@ -150,6 +156,55 @@ class AgentStoreBonus(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class FacturiBonusDecision(Base):
+    """Decizie persistentă pentru o factură bonus: se ține pe (tenant, year,
+    month, client, amount) — combinație stabilă între re-import-uri, spre
+    deosebire de raw_sale.id care se schimbă la fiecare refresh de date.
+
+    Rolul: după ce o factură < threshold e reasignată (fie automat prin
+    regula KA, fie manual prin meniu), scriem aici decizia ca să nu mai apară
+    ca "de asignat" la următorul import. Permite și "dezasignează" (dacă
+    ștergem decizia, factura revine ca pending).
+
+    `source`: 'auto' (regula KA aplicată la import) sau 'manual' (user a
+    apăsat accept în meniu).
+    """
+
+    __tablename__ = "facturi_bonus_decisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "year", "month", "client", "amount",
+            name="uq_facturi_bonus_decisions_key",
+        ),
+    )
+
+    id: Mapped[UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("tenants.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    year: Mapped[int] = mapped_column(Integer, nullable=False)
+    month: Mapped[int] = mapped_column(Integer, nullable=False)
+    client: Mapped[str] = mapped_column(String(500), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False)
+    target_agent_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("agents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    target_store_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("stores.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="auto")
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
     )
 
 

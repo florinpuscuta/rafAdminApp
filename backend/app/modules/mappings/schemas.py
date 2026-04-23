@@ -23,7 +23,6 @@ class MappingOut(APISchema):
 class IngestSummary(APISchema):
     rows_processed: int
     stores_created: int
-    agents_created: int
     mappings_created: int
     mappings_updated: int
 

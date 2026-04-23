@@ -34,7 +34,6 @@ class SalesListResponse(APISchema):
 
 class AlocareSummary(APISchema):
     rows_processed: int = 0
-    agents_created: int = 0
     stores_created: int = 0
     store_aliases_created: int = 0
     agent_aliases_created: int = 0

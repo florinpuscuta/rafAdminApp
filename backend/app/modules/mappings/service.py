@@ -19,9 +19,19 @@ from openpyxl import load_workbook
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.agents.models import Agent
+from app.modules.agents.models import Agent, AgentAlias
 from app.modules.mappings.models import StoreAgentMapping
 from app.modules.stores.models import Store
+
+
+class UnknownAgentError(ValueError):
+    """Ridicată când `agent_unificat` nu match-uiește un Agent sau alias existent.
+
+    Scop: blocăm crearea tăcută de agenți fantomă când user-ul greșește un nume
+    la editarea/crearea unei mapări (ex. "Puscutai" în loc de "Puscuta"). User-ul
+    trebuie ori să scrie exact numele existent, ori să adauge alias/creeze agent
+    explicit din pagina de agenți.
+    """
 
 # Headerele din fișier — exact cum le-a structurat Raf.
 _EXPECTED_HEADERS = [
@@ -114,6 +124,28 @@ async def ingest_mapping_rows(
         select(Agent).where(Agent.tenant_id == tenant_id)
     )).scalars().all()
     agent_by_name = {a.full_name: a for a in existing_agents}
+    existing_aliases = (await session.execute(
+        select(AgentAlias.raw_agent, AgentAlias.agent_id)
+        .where(AgentAlias.tenant_id == tenant_id)
+    )).all()
+    agent_by_id = {a.id: a for a in existing_agents}
+    alias_to_agent = {
+        raw: agent_by_id[aid] for raw, aid in existing_aliases if aid in agent_by_id
+    }
+
+    # Strict mode pentru ingest XLSX: orice `agent_unificat` trebuie să match-uiască
+    # un Agent sau un alias existent. Altfel abortăm — nu mai creăm fantome orbește.
+    unknown = sorted({
+        r["agent_unificat"] for r in rows
+        if r["agent_unificat"] not in agent_by_name
+        and r["agent_unificat"] not in alias_to_agent
+    })
+    if unknown:
+        raise UnknownAgentError(
+            "Agenți necunoscuți în fișierul de mapări: "
+            + ", ".join(unknown)
+            + ". Adaugă-i ca alias sau creează-i manual înainte de upload."
+        )
 
     # Cache existing mappings pentru a face upsert.
     existing_mappings = (await session.execute(
@@ -124,7 +156,7 @@ async def ingest_mapping_rows(
         for m in existing_mappings
     }
 
-    stores_created = agents_created = 0
+    stores_created = 0
     mappings_created = mappings_updated = 0
 
     for r in rows:
@@ -141,13 +173,7 @@ async def ingest_mapping_rows(
             store_by_name[cheie] = store
             stores_created += 1
 
-        agent = agent_by_name.get(agent_name)
-        if agent is None:
-            agent = Agent(tenant_id=tenant_id, full_name=agent_name)
-            session.add(agent)
-            await session.flush()
-            agent_by_name[agent_name] = agent
-            agents_created += 1
+        agent = agent_by_name.get(agent_name) or alias_to_agent.get(agent_name)
 
         key = (r["source"], r["client_original"], r["ship_to_original"])
         existing = mapping_by_key.get(key)
@@ -182,7 +208,6 @@ async def ingest_mapping_rows(
     return {
         "rows_processed": len(rows),
         "stores_created": stores_created,
-        "agents_created": agents_created,
         "mappings_created": mappings_created,
         "mappings_updated": mappings_updated,
     }
@@ -314,9 +339,12 @@ async def _get_or_create_store(
     return s
 
 
-async def _get_or_create_agent(
+async def _resolve_agent_strict(
     session: AsyncSession, tenant_id: UUID, full_name: str,
 ) -> Agent:
+    """Rezolvă agentul fie prin full_name exact, fie prin alias (raw_agent).
+    Ridică `UnknownAgentError` dacă nu există — NU creează fantome pe typo.
+    """
     existing = (await session.execute(
         select(Agent).where(
             Agent.tenant_id == tenant_id, Agent.full_name == full_name
@@ -324,10 +352,18 @@ async def _get_or_create_agent(
     )).scalar_one_or_none()
     if existing is not None:
         return existing
-    a = Agent(tenant_id=tenant_id, full_name=full_name)
-    session.add(a)
-    await session.flush()
-    return a
+    alias = (await session.execute(
+        select(Agent).join(AgentAlias, AgentAlias.agent_id == Agent.id).where(
+            AgentAlias.tenant_id == tenant_id,
+            AgentAlias.raw_agent == full_name,
+        )
+    )).scalar_one_or_none()
+    if alias is not None:
+        return alias
+    raise UnknownAgentError(
+        f"Agent necunoscut: '{full_name}'. Adaugă-l ca alias pe un agent existent "
+        f"sau creează agentul în pagina 'Agenți' înainte de a salva maparea."
+    )
 
 
 async def get_mapping(
@@ -353,7 +389,7 @@ async def create_mapping(
     store = await _get_or_create_store(
         session, tenant_id, cheie, client_original, ship_to_original,
     )
-    agent = await _get_or_create_agent(session, tenant_id, agent_name)
+    agent = await _resolve_agent_strict(session, tenant_id, agent_name)
 
     m = StoreAgentMapping(
         tenant_id=tenant_id,
@@ -401,7 +437,7 @@ async def update_mapping(
     if "agent_unificat" in data and data["agent_unificat"] is not None:
         agent_name = data["agent_unificat"].strip()
         m.agent_unificat = agent_name
-        agent = await _get_or_create_agent(session, tenant_id, agent_name)
+        agent = await _resolve_agent_strict(session, tenant_id, agent_name)
         m.agent_id = agent.id
 
     await session.flush()

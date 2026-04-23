@@ -402,7 +402,6 @@ function ResultPanel({ result }: { result: ImportResponse }) {
           <div style={styles.subTitle}>Alocare — normalizare canonică</div>
           <div style={styles.kpiGrid}>
             <Kpi label="Rânduri Alocare" value={result.alocare.rowsProcessed} variant="muted" />
-            <Kpi label="Agenți creați" value={result.alocare.agentsCreated} variant="success" />
             <Kpi label="Magazine create" value={result.alocare.storesCreated} variant="success" />
             <Kpi label="Alias-uri magazine" value={result.alocare.storeAliasesCreated} variant="muted" />
             <Kpi label="Alias-uri agenți" value={result.alocare.agentAliasesCreated} variant="muted" />

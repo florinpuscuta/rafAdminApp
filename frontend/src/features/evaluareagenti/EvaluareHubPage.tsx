@@ -37,21 +37,30 @@ export default function EvaluareHubPage() {
       <h2 style={styles.section}>Analiza</h2>
       <div style={styles.grid}>
         <HubCard
-          to="/evaluare/matricea"
-          title="Matricea Agenți"
-          desc="Tabel KPI per agent: vânzări, salariu (fix+bonus), costuri, cost/100k."
+          to="/evaluare/dashboard"
+          title="Dashboard agenți"
+          desc="KPI-uri per agent: magazine, vânzări, cheltuieli, % cost/vânzări, cost/100k, YoY. Toggle An/Lună + chart."
         />
         <HubCard
-          to="/evaluare/zona-detaliu"
-          title="Detaliu Zonă"
-          desc="Performanță magazine din zona unui agent (luna / YTD)."
-          badge="soon"
+          to="/evaluare/podium"
+          title="Podium agenți"
+          desc="Top performeri după scor compozit: eficiență, profit, creștere, productivitate — ponderi ajustabile. Ține cont de resurse (cheltuieli + magazine)."
         />
         <HubCard
-          to="/evaluare/zona-ranking"
-          title="Ranking Zone"
-          desc="Clasament zone după vânzări, cost/100k și bonusări."
-          badge="soon"
+          to="/evaluare/facturi-bonus"
+          title="Facturi bonus de asignat"
+          badge="Nou"
+          desc="Facturi centrale < -200k RON pe clienți KA, distribuite aiurea pe magazine/agenți. Le reasignezi pe Puscuta + CHAIN Centrala cu bifă per factură. Totalul firmei nu se schimbă; backup automat."
+        />
+        <HubCard
+          to="/evaluare/cost-anual"
+          title="Analiza costuri zona an"
+          desc="Cost total per agent, pe fiecare lună a anului, cu totaluri pe luni și grand total."
+        />
+        <HubCard
+          to="/evaluare/agent-anual"
+          title="Analiza anuală pe agent"
+          desc="Un singur agent: 12 luni × categorii de cheltuieli (sal. fix, bonus, merchandiser, auto, etc.) + grand total."
         />
       </div>
     </div>

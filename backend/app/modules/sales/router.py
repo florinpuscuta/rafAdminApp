@@ -11,7 +11,6 @@ from fastapi import Request
 import asyncio
 
 from app.modules.agents import service as agents_service
-from app.modules.agents.models import Agent, AgentAlias, AgentStoreAssignment
 from app.modules.audit import service as audit_service
 from app.modules.products import service as products_service
 from app.modules.sales import backfill as sales_backfill
@@ -19,6 +18,7 @@ from app.modules.sales import import_service as sales_import_service
 from app.modules.sales import importer as sales_importer
 from app.modules.sales import jobs as sales_jobs
 from app.modules.sales import service as sales_service
+from app.modules.sales.import_service import _ImportAborted, _normalize_alocare
 from app.modules.sales.schemas import (
     AlocareSummary,
     ImportBatchOut,
@@ -30,124 +30,9 @@ from app.modules.sales.schemas import (
     SalesListResponse,
 )
 from app.modules.stores import service as stores_service
-from app.modules.stores.models import Store, StoreAlias
 from app.modules.users.models import User
-from sqlalchemy import select
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
-
-
-async def _normalize_alocare(
-    session: AsyncSession,
-    *,
-    tenant_id: UUID,
-    user_id: UUID,
-    alocare_rows: list[dict],
-) -> dict[str, int]:
-    """
-    Ia rândurile din sheet-ul Alocare (Client, Ship-to, Agent) și creează:
-      - Agent canonic (get-or-create pe name)
-      - Store canonic (get-or-create pe name = combined_key)
-      - StoreAlias (raw_client = combined_key)
-      - AgentAlias (raw_agent = agent_name)
-      - AgentStoreAssignment (agent_id, store_id)
-
-    Idempotent: re-rulat, nu dublează — fiecare entitate are unique constraint
-    pe (tenant_id, cheie naturală).
-    """
-    created_agents = created_stores = 0
-    created_store_aliases = created_agent_aliases = created_assignments = 0
-
-    # 1) Cache existing canonicals pentru lookup rapid (O(1) în loc de query
-    # per rând — Alocare poate avea 200+ rânduri).
-    existing_stores = (await session.execute(
-        select(Store).where(Store.tenant_id == tenant_id)
-    )).scalars().all()
-    store_by_name = {s.name: s for s in existing_stores}
-
-    existing_agents = (await session.execute(
-        select(Agent).where(Agent.tenant_id == tenant_id)
-    )).scalars().all()
-    agent_by_name = {a.full_name: a for a in existing_agents}
-
-    existing_store_aliases = (await session.execute(
-        select(StoreAlias.raw_client).where(StoreAlias.tenant_id == tenant_id)
-    )).scalars().all()
-    store_alias_set = set(existing_store_aliases)
-
-    existing_agent_aliases = (await session.execute(
-        select(AgentAlias.raw_agent).where(AgentAlias.tenant_id == tenant_id)
-    )).scalars().all()
-    agent_alias_set = set(existing_agent_aliases)
-
-    existing_assignments = (await session.execute(
-        select(AgentStoreAssignment.agent_id, AgentStoreAssignment.store_id)
-        .where(AgentStoreAssignment.tenant_id == tenant_id)
-    )).all()
-    assignment_set = {(a, s) for a, s in existing_assignments}
-
-    for row in alocare_rows:
-        raw_client = row["raw_client"]
-        raw_ship_to = row["raw_ship_to"]
-        combined_key = row["combined_key"]
-        agent_name = row["agent_name"]
-
-        # Agent canonic
-        agent = agent_by_name.get(agent_name)
-        if agent is None:
-            agent = await agents_service.create_agent(
-                session, tenant_id=tenant_id, full_name=agent_name,
-            )
-            agent_by_name[agent_name] = agent
-            created_agents += 1
-
-        # Store canonic — chain = raw_client (firma-mamă), city = raw_ship_to
-        store = store_by_name.get(combined_key)
-        if store is None:
-            store = await stores_service.create_store(
-                session, tenant_id=tenant_id,
-                name=combined_key, chain=raw_client, city=raw_ship_to,
-            )
-            store_by_name[combined_key] = store
-            created_stores += 1
-
-        # StoreAlias pe cheia combinată (match cu raw_sales.client).
-        if combined_key not in store_alias_set:
-            await stores_service.create_alias(
-                session, tenant_id=tenant_id,
-                raw_client=combined_key, store_id=store.id,
-                resolved_by_user_id=user_id,
-            )
-            store_alias_set.add(combined_key)
-            created_store_aliases += 1
-
-        # AgentAlias pe numele agentului (match cu raw_sales.agent).
-        if agent_name not in agent_alias_set:
-            await agents_service.create_alias(
-                session, tenant_id=tenant_id,
-                raw_agent=agent_name, agent_id=agent.id,
-                resolved_by_user_id=user_id,
-            )
-            agent_alias_set.add(agent_name)
-            created_agent_aliases += 1
-
-        # Assignment
-        assn_key = (agent.id, store.id)
-        if assn_key not in assignment_set:
-            session.add(AgentStoreAssignment(
-                tenant_id=tenant_id, agent_id=agent.id, store_id=store.id,
-            ))
-            assignment_set.add(assn_key)
-            created_assignments += 1
-
-    await session.flush()
-    return {
-        "agents_created": created_agents,
-        "stores_created": created_stores,
-        "store_aliases_created": created_store_aliases,
-        "agent_aliases_created": created_agent_aliases,
-        "assignments_created": created_assignments,
-    }
 
 
 @router.get("", response_model=SalesListResponse)
@@ -223,12 +108,18 @@ async def import_sales(
     alocare_rows = sales_importer.parse_alocare_sheet(content)
     alocare_summary = AlocareSummary()
     if alocare_rows:
-        result = await _normalize_alocare(
-            session,
-            tenant_id=current_user.tenant_id,
-            user_id=current_user.id,
-            alocare_rows=alocare_rows,
-        )
+        try:
+            result = await _normalize_alocare(
+                session,
+                tenant_id=current_user.tenant_id,
+                user_id=current_user.id,
+                alocare_rows=alocare_rows,
+            )
+        except _ImportAborted as e:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail={"code": e.code, "message": e.message},
+            )
         alocare_summary = AlocareSummary(
             rows_processed=len(alocare_rows),
             **result,

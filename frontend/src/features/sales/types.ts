@@ -22,7 +22,6 @@ export interface SalesListResponse {
 
 export interface AlocareSummary {
   rowsProcessed: number;
-  agentsCreated: number;
   storesCreated: number;
   storeAliasesCreated: number;
   agentAliasesCreated: number;
