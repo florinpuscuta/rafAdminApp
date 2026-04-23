@@ -13,6 +13,7 @@ export interface TgtMonthCell {
   prevSales: string;
   currSales: string;
   target: string;
+  targetPct: string;
   gap: string;
   achievementPct: string | null;
 }
@@ -38,17 +39,29 @@ export interface TgtMonthTotal {
   prevSales: string;
   currSales: string;
   target: string;
+  targetPct: string;
   gap: string;
   achievementPct: string | null;
+}
+
+export interface TgtGrowthItem {
+  year: number;
+  month: number;
+  pct: string;
+}
+
+export interface TgtGrowthList {
+  year: number;
+  items: TgtGrowthItem[];
 }
 
 export interface TgtResponse {
   scope: TgtScope;
   yearCurr: number;
   yearPrev: number;
-  targetPct: string;
   lastUpdate: string | null;
   agents: TgtAgentRow[];
   monthTotals: TgtMonthTotal[];
   grandTotals: TgtTotals;
+  growthPct: TgtGrowthItem[];
 }

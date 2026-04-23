@@ -23,6 +23,7 @@ export interface Pret3NetProduct {
   clients: Record<string, Pret3NetClient>;
   totalSales: string;
   totalQty: string;
+  isPrivateLabel?: boolean;
 }
 
 export interface Pret3NetResponse {

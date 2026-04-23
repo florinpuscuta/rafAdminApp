@@ -720,3 +720,255 @@ async def build_tree(
         "ytd_months": ytd_months,
         "selected_months": selected,
     }
+
+
+# ── Tree by client (chain/partener) ────────────────────────────────────────
+
+
+_CHAIN_ORDER = ["Dedeman", "Altex", "Leroy Merlin", "Hornbach", "Alte"]
+
+
+def _extract_chain_from_client(raw: str | None) -> str:
+    """Clasifică un string-client KA în rețeaua canonică. Trebuie să rămână
+    aliniat cu mkt_facing._extract_chain."""
+    if not raw:
+        return "Alte"
+    upper = raw.upper()
+    if "DEDEMAN" in upper:
+        return "Dedeman"
+    if "ALTEX" in upper:
+        return "Altex"
+    if "LEROY" in upper or "MERLIN" in upper:
+        return "Leroy Merlin"
+    if "HORNBACH" in upper:
+        return "Hornbach"
+    return "Alte"
+
+
+async def build_tree_by_client(
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    scope: str,
+    year: int,
+    months: list[int] | None = None,
+) -> dict[str, Any]:
+    """Arbore Client (rețea) → Categorie → (Subgrupe EPS) → Produs.
+
+    Aceeași sursă/filtru per scope ca `build_tree`, dar agregat pe rețeaua
+    parteneră derivată din `raw_sales.client` (Dedeman, Altex, Leroy Merlin,
+    Hornbach, Alte). Nivelul brand este eliminat — categoriile (sau Target
+    Market-urile Sika) sunt direct sub client.
+    """
+    groups = _SCOPE_GROUPS.get(scope.lower(), _GROUPS_ADP)
+    sources = [s for g in groups for s in g]
+    year_prev = year - 1
+
+    empty = {
+        "scope": scope, "year": year,
+        "last_update": None, "clients": [],
+        "grand_sales": Decimal(0), "grand_qty": Decimal(0),
+        "grand_sales_prev": Decimal(0), "grand_qty_prev": Decimal(0),
+        "ytd_months": [], "selected_months": [],
+    }
+    if not sources:
+        return empty
+
+    if months is not None and len(months) == 0:
+        empty["last_update"] = await _last_update(session, tenant_id, sources=sources)
+        return empty
+
+    months_stmt = (
+        select(RawSale.month)
+        .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+        .where(
+            RawSale.tenant_id == tenant_id,
+            RawSale.year == year,
+            func.upper(RawSale.channel) == "KA",
+            ImportBatch.source.in_(sources),
+        )
+        .distinct()
+    )
+    ytd_months = sorted({int(r.month) for r in (await session.execute(months_stmt)).all()})
+
+    selected = sorted({m for m in months if 1 <= m <= 12}) if months is not None else ytd_months
+    if not selected:
+        empty["last_update"] = await _last_update(session, tenant_id, sources=sources)
+        empty["ytd_months"] = ytd_months
+        return empty
+
+    # Agregare pe (product_id, year, raw_client) — rețeaua se deduce în Python
+    # (numărul de clienți distincți e mic după mapare, chiar dacă raw-ul e divers).
+    sales_stmt = (
+        select(
+            RawSale.product_id,
+            RawSale.year,
+            RawSale.client,
+            func.coalesce(func.sum(RawSale.amount), 0).label("sales"),
+            func.coalesce(func.sum(RawSale.quantity), 0).label("qty"),
+        )
+        .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+        .where(
+            RawSale.tenant_id == tenant_id,
+            RawSale.year.in_([year_prev, year]),
+            RawSale.month.in_(selected),
+            func.upper(RawSale.channel) == "KA",
+            ImportBatch.source.in_(sources),
+            RawSale.product_id.is_not(None),
+        )
+        .group_by(RawSale.product_id, RawSale.year, RawSale.client)
+    )
+    sales_rows = (await session.execute(sales_stmt)).all()
+    if not sales_rows:
+        empty["last_update"] = await _last_update(session, tenant_id, sources=sources)
+        empty["ytd_months"] = ytd_months
+        empty["selected_months"] = selected
+        return empty
+
+    # (chain, product_id) → [sales_curr, qty_curr, sales_prev, qty_prev]
+    sales_map: dict[tuple[str, UUID], list[Decimal]] = {}
+    product_ids: set[UUID] = set()
+    for r in sales_rows:
+        chain = _extract_chain_from_client(r.client)
+        pid = r.product_id
+        product_ids.add(pid)
+        key = (chain, pid)
+        entry = sales_map.setdefault(key, [Decimal(0), Decimal(0), Decimal(0), Decimal(0)])
+        if int(r.year) == year:
+            entry[0] += Decimal(r.sales or 0)
+            entry[1] += Decimal(r.qty or 0)
+        else:
+            entry[2] += Decimal(r.sales or 0)
+            entry[3] += Decimal(r.qty or 0)
+
+    # Hidratare produs/categorie (brandul nu mai e folosit la afișare)
+    meta_stmt = (
+        select(
+            Product.id, Product.code, Product.name, Product.category_id,
+            ProductCategory.code.label("cat_code"),
+            ProductCategory.label.label("cat_label"),
+        )
+        .outerjoin(ProductCategory, ProductCategory.id == Product.category_id)
+        .where(Product.id.in_(list(product_ids)))
+    )
+    meta_by_id: dict[UUID, Any] = {
+        m.id: m for m in (await session.execute(meta_stmt)).all()
+    }
+
+    is_sika_scope = scope.lower() == "sika"
+
+    # chain → { cat_key → cat_bucket }
+    client_buckets: dict[str, dict[str, Any]] = {}
+
+    for (chain, pid), entry in sales_map.items():
+        sales, qty, sales_prev, qty_prev = entry
+        if sales == 0 and qty == 0 and sales_prev == 0 and qty_prev == 0:
+            continue
+        m = meta_by_id.get(pid)
+        if m is None:
+            continue
+
+        if is_sika_scope:
+            tm_label = _classify_sika_tm(m.name)
+            cat_key = (None, tm_label, tm_label)
+            cat_label = tm_label
+            cat_code = ""
+            cat_cat_id = None
+        else:
+            cat_key = (m.category_id, m.cat_code or "",
+                       m.cat_label or "— fără categorie —")
+            cat_label = m.cat_label or "— fără categorie —"
+            cat_code = m.cat_code or ""
+            cat_cat_id = m.category_id
+
+        cb_root = client_buckets.setdefault(chain, {
+            "chain": chain,
+            "sales": Decimal(0), "qty": Decimal(0),
+            "sales_prev": Decimal(0), "qty_prev": Decimal(0),
+            "categories": {},
+        })
+        cb_root["sales"] += sales
+        cb_root["qty"] += qty
+        cb_root["sales_prev"] += sales_prev
+        cb_root["qty_prev"] += qty_prev
+
+        cb = cb_root["categories"].setdefault(cat_key, {
+            "category_id": cat_cat_id,
+            "code": cat_code,
+            "label": cat_label,
+            "sales": Decimal(0), "qty": Decimal(0),
+            "sales_prev": Decimal(0), "qty_prev": Decimal(0),
+            "products": [],
+        })
+        cb["sales"] += sales
+        cb["qty"] += qty
+        cb["sales_prev"] += sales_prev
+        cb["qty_prev"] += qty_prev
+        cb["products"].append({
+            "product_id": m.id,
+            "code": m.code,
+            "name": m.name,
+            "sales": sales,
+            "qty": qty,
+            "sales_prev": sales_prev,
+            "qty_prev": qty_prev,
+            "avg_price": (sales / qty) if qty > 0 else None,
+            "avg_price_prev": (sales_prev / qty_prev) if qty_prev > 0 else None,
+        })
+
+    clients_out: list[dict[str, Any]] = []
+    grand_sales = Decimal(0)
+    grand_qty = Decimal(0)
+    grand_sales_prev = Decimal(0)
+    grand_qty_prev = Decimal(0)
+    for cb_root in client_buckets.values():
+        cats_out: list[dict[str, Any]] = []
+        for cb in cb_root["categories"].values():
+            cb["products"].sort(key=lambda p: (-p["sales"], p["name"].lower()))
+            cat_out: dict[str, Any] = {
+                "category_id": cb["category_id"],
+                "code": cb["code"],
+                "label": cb["label"],
+                "sales": cb["sales"],
+                "qty": cb["qty"],
+                "sales_prev": cb["sales_prev"],
+                "qty_prev": cb["qty_prev"],
+                "products": cb["products"],
+                "subgroups": None,
+            }
+            if (cb["code"] or "").upper() == "EPS":
+                cat_out["subgroups"] = _build_eps_subgroups(cb["products"])
+            cats_out.append(cat_out)
+        cats_out.sort(key=lambda c: (-c["sales"], c["label"].lower()))
+        clients_out.append({
+            "chain": cb_root["chain"],
+            "sales": cb_root["sales"],
+            "qty": cb_root["qty"],
+            "sales_prev": cb_root["sales_prev"],
+            "qty_prev": cb_root["qty_prev"],
+            "categories": cats_out,
+        })
+        grand_sales += cb_root["sales"]
+        grand_qty += cb_root["qty"]
+        grand_sales_prev += cb_root["sales_prev"]
+        grand_qty_prev += cb_root["qty_prev"]
+
+    clients_out.sort(
+        key=lambda c: (
+            _CHAIN_ORDER.index(c["chain"]) if c["chain"] in _CHAIN_ORDER else 99,
+            -c["sales"],
+        )
+    )
+
+    return {
+        "scope": scope,
+        "year": year,
+        "last_update": await _last_update(session, tenant_id, sources=sources),
+        "clients": clients_out,
+        "grand_sales": grand_sales,
+        "grand_qty": grand_qty,
+        "grand_sales_prev": grand_sales_prev,
+        "grand_qty_prev": grand_qty_prev,
+        "ytd_months": ytd_months,
+        "selected_months": selected,
+    }

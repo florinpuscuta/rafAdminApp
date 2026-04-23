@@ -19,6 +19,7 @@ export interface KaRetailRow {
   /** (kaPrice - retailPrice) / retailPrice * 100. */
   diffPct: string | null;
   totalSales: string;
+  isPrivateLabel?: boolean;
 }
 
 export interface KaRetailResponse {

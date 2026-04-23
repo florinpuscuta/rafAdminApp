@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.modules.ai.models import AIConversation, AIMessage
+from app.modules.app_settings.service import get_raw_ai_key
 
 log = logging.getLogger("adeplast.ai")
 
@@ -35,14 +36,29 @@ PROVIDERS = {
 }
 
 
-def _detect_provider() -> str | None:
-    """Forțat prin settings.ai_provider (dacă are key setat), altfel primul provider cu key."""
+async def _effective_key(
+    session: AsyncSession, tenant_id: UUID, provider: str,
+) -> str | None:
+    """Cheia efectivă pentru `provider`: preferăm DB (per tenant), fallback pe env."""
+    db_key = await get_raw_ai_key(session, tenant_id, provider)
+    if db_key:
+        return db_key
+    cfg = PROVIDERS.get(provider)
+    if not cfg:
+        return None
+    return getattr(settings, cfg["key_attr"], None)
+
+
+async def _detect_provider(
+    session: AsyncSession, tenant_id: UUID,
+) -> str | None:
+    """Forțat prin settings.ai_provider (dacă are key setat), altfel primul provider
+    cu key disponibil — DB tenant-scoped câștigă peste env."""
     if settings.ai_provider and settings.ai_provider in PROVIDERS:
-        cfg = PROVIDERS[settings.ai_provider]
-        if getattr(settings, cfg["key_attr"], None):
+        if await _effective_key(session, tenant_id, settings.ai_provider):
             return settings.ai_provider
     for name in ("anthropic", "openai", "xai", "deepseek"):
-        if getattr(settings, PROVIDERS[name]["key_attr"], None):
+        if await _effective_key(session, tenant_id, name):
             return name
     return None
 
@@ -113,10 +129,10 @@ def _chat_history(history: list[AIMessage], user_content: str) -> list[dict]:
     return msgs
 
 
-def _call_anthropic(history: list[AIMessage], user_content: str) -> str:
+def _call_anthropic(history: list[AIMessage], user_content: str, *, api_key: str) -> str:
     import anthropic
 
-    client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+    client = anthropic.Anthropic(api_key=api_key)
     resp = client.messages.create(
         model=settings.anthropic_model,
         max_tokens=1024,
@@ -148,14 +164,16 @@ def _call_openai_compat(
     return resp.choices[0].message.content or "(răspuns gol)"
 
 
-def _call_llm(provider: str, history: list[AIMessage], user_content: str) -> str:
+def _call_llm(
+    provider: str, history: list[AIMessage], user_content: str, *, api_key: str,
+) -> str:
     if provider == "anthropic":
-        return _call_anthropic(history, user_content)
+        return _call_anthropic(history, user_content, api_key=api_key)
     cfg = PROVIDERS[provider]
     return _call_openai_compat(
         history,
         user_content,
-        api_key=getattr(settings, cfg["key_attr"]),
+        api_key=api_key,
         model=getattr(settings, cfg["model_attr"]),
         base_url=cfg.get("base_url"),
     )
@@ -176,18 +194,21 @@ async def send_message(
     session.add(user_msg)
     await session.flush()
 
-    provider = _detect_provider()
+    provider = await _detect_provider(session, conv.tenant_id)
     try:
         if provider is None:
             provider = "stub"
             assistant_text = (
                 "ℹ️ AI Assistant e în mod stub (niciun provider configurat). "
-                "Setează una dintre: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, "
-                "`XAI_API_KEY`, `DEEPSEEK_API_KEY` în `.env` și repornește backend-ul. "
-                "Opțional `AI_PROVIDER=<nume>` ca să forțezi un provider anume."
+                "Setează o cheie în Settings → Chei AI sau una dintre variabilele "
+                "`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `XAI_API_KEY`, `DEEPSEEK_API_KEY` "
+                "în `.env` și repornește backend-ul. Opțional `AI_PROVIDER=<nume>` ca să "
+                "forțezi un provider anume."
             )
         else:
-            assistant_text = _call_llm(provider, history, user_content)
+            api_key = await _effective_key(session, conv.tenant_id, provider)
+            assert api_key is not None  # _detect_provider a confirmat prezența
+            assistant_text = _call_llm(provider, history, user_content, api_key=api_key)
     except Exception as exc:  # noqa: BLE001 — orice eroare LLM → mesaj lizibil
         log.exception("AI provider error")
         assistant_text = f"⚠️ Eroare provider `{provider}`: {exc}"

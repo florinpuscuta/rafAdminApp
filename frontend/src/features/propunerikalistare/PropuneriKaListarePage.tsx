@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "../../shared/api";
+import { CollapsibleBlock } from "../../shared/ui/CollapsibleBlock";
 import { useCompanyScope } from "../../shared/ui/CompanyScopeProvider";
 import { TableSkeleton } from "../../shared/ui/Skeleton";
 import { useToast } from "../../shared/ui/ToastProvider";
+import { groupByEpsSubgroup, isEpsCategory } from "../../shared/utils/epsSubgroup";
 import { downloadTableAsCsv } from "../../shared/utils/exportCsv";
+import { sikaTm } from "../../shared/utils/sikaTm";
 import { getPropuneriListare } from "./api";
 import type { PropuneriFilters, PropuneriResponse, PropunereRow } from "./types";
 
@@ -76,12 +79,16 @@ export default function PropuneriKaListarePage() {
 
   const otherKas = useMemo(() => kaClients.filter((k) => k !== activeKa), [kaClients, activeKa]);
 
+  const isSika = scope === "sika";
+
   // Grupare pe categorie pentru KA-ul activ.
+  // La Sika folosim TM (Target Market) în loc de category_code.
   const byCategory = useMemo(() => {
     const out: Record<string, PropunereRow[]> = {};
     for (const row of currentList) {
-      if (!out[row.category]) out[row.category] = [];
-      out[row.category].push(row);
+      const key = isSika ? sikaTm(row.description) : row.category;
+      if (!out[key]) out[key] = [];
+      out[key].push(row);
     }
     // Sortare categorii pe total vânzări desc
     const entries = Object.entries(out).sort(([, a], [, b]) => {
@@ -90,7 +97,7 @@ export default function PropuneriKaListarePage() {
       return sb - sa;
     });
     return entries;
-  }, [currentList]);
+  }, [currentList, isSika]);
 
   function update(patch: Partial<PropuneriFilters>) {
     const next = { ...filters, ...patch };
@@ -195,65 +202,85 @@ export default function PropuneriKaListarePage() {
           Toate produsele sunt deja listate la {KA_LABELS[activeKa] ?? activeKa}.
         </div>
       ) : (
-        byCategory.map(([cat, items]) => {
+        byCategory.map(([cat, items], catIdx) => {
           const catSales = items.reduce((s, p) => s + Number(p.totalSales || 0), 0);
+          const isEps = !isSika && isEpsCategory(cat);
+          const epsGroups = isEps
+            ? groupByEpsSubgroup(items, (p) => p.description, (p) => p.totalSales)
+            : null;
+
+          const headerRow = (
+            <tr>
+              <th style={th}>Produs</th>
+              <th style={{ ...th, textAlign: "right" }}>Vânzări alte KA</th>
+              <th style={{ ...th, textAlign: "right" }}>Cantitate</th>
+              <th style={{ ...th, textAlign: "right" }}>Preț min</th>
+              <th style={{ ...th, textAlign: "center" }}>Sursă preț</th>
+              <th style={{ ...th, textAlign: "right" }}>Nr. rețele</th>
+              {otherKas.map((ok) => (
+                <th key={ok} style={{ ...th, textAlign: "right", color: KA_COLORS[ok] }}>
+                  {KA_LABELS[ok] ?? ok}
+                </th>
+              ))}
+            </tr>
+          );
+
+          const renderRow = (p: PropunereRow, i: number) => (
+            <tr key={`${p.description}-${i}`}>
+              <td style={td}>{p.description}</td>
+              <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                {fmtFull(p.totalSales)}
+              </td>
+              <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+                {fmtFull(p.totalQty)}
+              </td>
+              <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>
+                {fmtPrice(p.minPrice)}
+              </td>
+              <td style={{ ...td, textAlign: "center", color: KA_COLORS[p.minPriceKa] ?? "inherit", fontWeight: 600 }}>
+                {KA_LABELS[p.minPriceKa] ?? p.minPriceKa}
+              </td>
+              <td style={{ ...td, textAlign: "right" }}>{p.numKas}</td>
+              {otherKas.map((ok) => (
+                <td key={ok} style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", color: KA_COLORS[ok] }}>
+                  {p.prices[ok] ? fmtPrice(p.prices[ok]) : "—"}
+                </td>
+              ))}
+            </tr>
+          );
+
           return (
             <div key={cat} style={styles.catBlock}>
-              <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                <div>
-                  <b style={{ fontSize: 14 }}>{cat}</b>
-                  <span style={{ marginLeft: 8, color: "var(--fg-muted, #888)", fontSize: 12 }}>
-                    {items.length} produse nelistate
-                  </span>
-                </div>
-                <div style={{ fontSize: 12, color: "var(--fg-muted, #888)" }}>
-                  Vânzări la alte rețele: <b>{fmtFull(catSales)}</b>
-                </div>
-              </div>
-              <div style={{ overflowX: "auto" }}>
-                <table ref={tableRef} style={styles.table}>
-                  <thead>
-                    <tr>
-                      <th style={th}>Produs</th>
-                      <th style={{ ...th, textAlign: "right" }}>Vânzări alte KA</th>
-                      <th style={{ ...th, textAlign: "right" }}>Cantitate</th>
-                      <th style={{ ...th, textAlign: "right" }}>Preț min</th>
-                      <th style={{ ...th, textAlign: "center" }}>Sursă preț</th>
-                      <th style={{ ...th, textAlign: "right" }}>Nr. rețele</th>
-                      {otherKas.map((ok) => (
-                        <th key={ok} style={{ ...th, textAlign: "right", color: KA_COLORS[ok] }}>
-                          {KA_LABELS[ok] ?? ok}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {items.map((p, i) => (
-                      <tr key={`${p.description}-${i}`}>
-                        <td style={td}>{p.description}</td>
-                        <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                          {fmtFull(p.totalSales)}
-                        </td>
-                        <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                          {fmtFull(p.totalQty)}
-                        </td>
-                        <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", fontWeight: 700 }}>
-                          {fmtPrice(p.minPrice)}
-                        </td>
-                        <td style={{ ...td, textAlign: "center", color: KA_COLORS[p.minPriceKa] ?? "inherit", fontWeight: 600 }}>
-                          {KA_LABELS[p.minPriceKa] ?? p.minPriceKa}
-                        </td>
-                        <td style={{ ...td, textAlign: "right" }}>{p.numKas}</td>
-                        {otherKas.map((ok) => (
-                          <td key={ok} style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums", color: KA_COLORS[ok] }}>
-                            {p.prices[ok] ? fmtPrice(p.prices[ok]) : "—"}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <CollapsibleBlock
+                title={cat}
+                subtitle={`${items.length} produse nelistate · vânzări alte rețele: ${fmtFull(catSales)}`}
+              >
+                {isEps && epsGroups ? (
+                  epsGroups.map((g, gi) => (
+                    <div key={g.key} style={styles.subBlock}>
+                      <CollapsibleBlock
+                        title={g.label}
+                        subtitle={`${g.products.length} produse · ${fmtFull(g.totalSales)}`}
+                        level={1}
+                      >
+                        <div style={{ overflowX: "auto" }}>
+                          <table ref={catIdx === 0 && gi === 0 ? tableRef : undefined} style={styles.table}>
+                            <thead>{headerRow}</thead>
+                            <tbody>{g.products.map(renderRow)}</tbody>
+                          </table>
+                        </div>
+                      </CollapsibleBlock>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table ref={catIdx === 0 ? tableRef : undefined} style={styles.table}>
+                      <thead>{headerRow}</thead>
+                      <tbody>{items.map(renderRow)}</tbody>
+                    </table>
+                  </div>
+                )}
+              </CollapsibleBlock>
             </div>
           );
         })
@@ -277,6 +304,18 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 6,
     padding: 12,
     marginBottom: 12,
+  },
+  subBlock: {
+    background: "var(--bg, #fafafa)",
+    border: "1px solid var(--border, #eee)",
+    borderRadius: 4,
+    padding: 8,
+    marginBottom: 8,
+  },
+  subHeader: {
+    display: "flex",
+    alignItems: "center",
+    marginBottom: 6,
   },
   emptyCard: {
     background: "var(--bg-elevated, #fafafa)",

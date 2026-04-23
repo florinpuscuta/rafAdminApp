@@ -14,6 +14,7 @@ from app.modules.grupe_produse.schemas import (
     GrupeProduseProductRow,
     GrupeProduseResponse,
     GrupeProduseTotals,
+    GrupeProduseTreeByClientResponse,
     GrupeProduseTreeResponse,
 )
 
@@ -175,3 +176,56 @@ async def get_tree(
         session, tenant_id, scope=scope, year=year_curr, months=months_list,
     )
     return GrupeProduseTreeResponse(**data)
+
+
+@router.get("/tree-by-client", response_model=GrupeProduseTreeByClientResponse)
+async def get_tree_by_client(
+    scope: str = Query("adp", description="'adp' | 'sika' | 'sikadp'"),
+    year: int | None = Query(None, ge=2000, le=2100),
+    months: str | None = Query(
+        None,
+        description=(
+            "Luni ca CSV (ex. '1,2,3'). "
+            "Omis = YTD auto (default). "
+            "String gol = niciuna. "
+            "'all' = tot anul."
+        ),
+    ),
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """Arbore Client (rețea) → Categorie → Produs — aceeași structură ca
+    `/tree` dar agrupat pe rețeaua parteneră (Dedeman/Altex/Leroy/Hornbach/Alte)."""
+    scope = scope.lower()
+    if scope not in _SCOPES:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_scope",
+                    "message": "scope trebuie adp|sika|sikadp"},
+        )
+    now = datetime.now(timezone.utc)
+    year_curr = year or now.year
+
+    months_list: list[int] | None
+    if months is None:
+        months_list = None
+    elif months.strip().lower() == "all":
+        months_list = list(range(1, 13))
+    elif months.strip() == "":
+        months_list = []
+    else:
+        try:
+            months_list = [
+                int(x.strip()) for x in months.split(",") if x.strip()
+            ]
+        except ValueError:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                detail={"code": "invalid_months",
+                        "message": "months trebuie CSV de numere 1..12"},
+            )
+
+    data = await svc.build_tree_by_client(
+        session, tenant_id, scope=scope, year=year_curr, months=months_list,
+    )
+    return GrupeProduseTreeByClientResponse(**data)

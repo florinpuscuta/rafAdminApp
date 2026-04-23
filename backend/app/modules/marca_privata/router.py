@@ -10,7 +10,8 @@ from app.core.db import get_session
 from app.modules.auth.deps import get_current_tenant_id
 from app.modules.marca_privata import service as svc
 from app.modules.marca_privata.schemas import (
-    MPClientRow,
+    MPCategoryCell,
+    MPChainRow,
     MPMonthCell,
     MPResponse,
     MPYearTotals,
@@ -36,21 +37,34 @@ def _month_to_model(c: svc.MonthCell) -> MPMonthCell:
     )
 
 
-def _client_to_model(c: svc.ClientRow) -> MPClientRow:
-    return MPClientRow(
-        client=c.client,
+def _chain_to_model(c: svc.ChainRow) -> MPChainRow:
+    # Asigurăm că fiecare rețea returnează toate cele 3 categorii (MU/EPS/UMEDE)
+    # în aceeași ordine — chiar dacă una e 0 — ca UI-ul să poată alinia
+    # coloanele și plăcintele fără să verifice prezența.
+    cats: list[MPCategoryCell] = []
+    for code, label in svc.CHAIN_CATEGORIES:
+        cell = c.categories.get(code) or svc.CategoryCell(code=code, label=label)
+        cats.append(MPCategoryCell(
+            code=cell.code,
+            label=cell.label,
+            sales_y1=cell.sales_y1,
+            sales_y2=cell.sales_y2,
+            diff=cell.diff,
+            pct=cell.pct,
+        ))
+    return MPChainRow(
+        chain=c.chain,
         sales_y1=c.sales_y1,
         sales_y2=c.sales_y2,
-        qty_y1=c.qty_y1,
-        qty_y2=c.qty_y2,
         diff=c.diff,
         pct=c.pct,
+        categories=cats,
     )
 
 
 def _build_response(data: svc.MarcaPrivataData) -> MPResponse:
     months = [_month_to_model(data.months[m]) for m in range(1, 13)]
-    clients = [_client_to_model(c) for c in data.clients]
+    chains = [_chain_to_model(c) for c in data.chains]
 
     grand_y1 = sum((m.sales_y1 for m in months), Decimal(0))
     grand_y2 = sum((m.sales_y2 for m in months), Decimal(0))
@@ -62,7 +76,7 @@ def _build_response(data: svc.MarcaPrivataData) -> MPResponse:
         year_prev=data.year_prev,
         last_update=data.last_update,
         months=months,
-        clients=clients,
+        chains=chains,
         grand_totals=MPYearTotals(
             sales_y1=grand_y1,
             sales_y2=grand_y2,

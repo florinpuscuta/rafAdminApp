@@ -40,6 +40,11 @@ import ActivitatePage from "./features/activitate/ActivitatePage";
 import AnalizaMagazinPage from "./features/analizamagazin/AnalizaMagazinPage";
 import AnalizaPeLuniPage from "./features/analizapeluni/AnalizaPeLuniPage";
 import BonusariPage from "./features/bonusari/BonusariPage";
+import EvaluareHubPage from "./features/evaluareagenti/EvaluareHubPage";
+import SalFixPage from "./features/evaluareagenti/SalFixPage";
+import InputLunarAgentPage from "./features/evaluareagenti/InputLunarAgentPage";
+import ZonaAgentPage from "./features/evaluareagenti/ZonaAgentPage";
+import MatriceaAgentiPage from "./features/evaluareagenti/MatriceaAgentiPage";
 import ComenziFaraIndPage from "./features/comenzifaraind/ComenziFaraIndPage";
 import GrupeProdusePage from "./features/grupeproduse/GrupeProdusePage";
 import ArboreProdusePage from "./features/arboreproduse/ArboreProdusePage";
@@ -143,6 +148,12 @@ function NoSikadp({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }
 
+function SikadpOnly({ children }: { children: ReactNode }) {
+  const { scope } = useCompanyScope();
+  if (scope !== "sikadp") return <Navigate to="/" replace />;
+  return <>{children}</>;
+}
+
 function AuthedShell() {
   return (
     <>
@@ -219,6 +230,15 @@ function AuthedShell() {
           <Route path="/settings/ai-keys" element={<RouteBoundary name="settings-ai-keys"><AiKeysPage /></RouteBoundary>} />
           <Route path="/settings/appearance" element={<RouteBoundary name="settings-appearance"><AppearancePage /></RouteBoundary>} />
           <Route path="/coming-soon/config" element={<RouteBoundary name="coming-soon-config"><ComingSoonPage title="De configurat" /></RouteBoundary>} />
+
+          {/* Evaluare — SIKADP only. Un hub cu două grupe: Input Date & Analiza. */}
+          <Route path="/evaluare" element={<SikadpOnly><RouteBoundary name="evaluare"><EvaluareHubPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/sal-fix" element={<SikadpOnly><RouteBoundary name="evaluare-sal-fix"><SalFixPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/input-lunar" element={<SikadpOnly><RouteBoundary name="evaluare-input"><InputLunarAgentPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/zona-agent" element={<SikadpOnly><RouteBoundary name="evaluare-zona-agent"><ZonaAgentPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/matricea" element={<SikadpOnly><RouteBoundary name="evaluare-matricea"><MatriceaAgentiPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/zona-detaliu" element={<SikadpOnly><RouteBoundary name="evaluare-zona-detaliu"><ComingSoonPage title="Detaliu Zonă" /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/zona-ranking" element={<SikadpOnly><RouteBoundary name="evaluare-zona-ranking"><ComingSoonPage title="Ranking Zone" /></RouteBoundary></SikadpOnly>} />
         </Routes>
       </Shell>
     </>

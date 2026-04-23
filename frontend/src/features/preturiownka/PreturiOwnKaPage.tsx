@@ -8,8 +8,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError, apiFetch } from "../../shared/api";
+import { CollapsibleBlock } from "../../shared/ui/CollapsibleBlock";
 import { useCompanyScope } from "../../shared/ui/CompanyScopeProvider";
+import { epsSubgroup, groupByEpsSubgroup } from "../../shared/utils/epsSubgroup";
 import { downloadTableAsCsv } from "../../shared/utils/exportCsv";
+import { groupBySikaTm } from "../../shared/utils/sikaTm";
 
 interface PriceCell {
   prod: string;
@@ -44,6 +47,7 @@ function fmtPrice(v: number | null | undefined): string {
 export default function PreturiOwnKaPage() {
   const { scope } = useCompanyScope();
   const company = scope === "sika" ? "sika" : "adeplast";
+  const isSika = scope === "sika";
   const [data, setData] = useState<CrossKaResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -67,6 +71,32 @@ export default function PreturiOwnKaPage() {
     if (!q) return data.products;
     return data.products.filter((p) => p.canonical_name.toUpperCase().includes(q));
   }, [data, search]);
+
+  // La Adeplast: EPS products (nume „EPS NN") → grupe pe subgrupe; restul → „Alte".
+  // La Sika: grupare pe TM (Building Finishing / Sealing & Bonding / ...).
+  const sections = useMemo(() => {
+    if (isSika) {
+      const tmGroups = groupBySikaTm(
+        filtered,
+        (p) => p.canonical_name,
+        (p) => (Number.isFinite(p.min_price) ? p.min_price : 0),
+      );
+      return { mode: "sika" as const, tmGroups };
+    }
+    const eps: ProductRow[] = [];
+    const rest: ProductRow[] = [];
+    for (const p of filtered) {
+      const sub = epsSubgroup(p.canonical_name);
+      if (sub.key !== "other") eps.push(p);
+      else rest.push(p);
+    }
+    const epsGroups = groupByEpsSubgroup(
+      eps,
+      (p) => p.canonical_name,
+      (p) => (Number.isFinite(p.min_price) ? p.min_price : 0),
+    );
+    return { mode: "adp" as const, epsGroups, rest };
+  }, [filtered, isSika]);
 
   if (loading) return <div style={{ padding: 20, color: "var(--muted)" }}>Se încarcă…</div>;
   if (error) return <div style={{ padding: 20, color: "var(--red)" }}>{error}</div>;
@@ -111,64 +141,125 @@ export default function PreturiOwnKaPage() {
         {data.products.length} produse · {filtered.length} afișate · spread = (max-min)/min × 100
       </div>
 
-      <div style={{ overflowX: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8 }}>
-        <table ref={tableRef} style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-          <thead>
-            <tr style={{ background: "var(--bg-elevated)" }}>
-              <th style={{ ...thStyle, textAlign: "left", minWidth: 200 }}>Produs</th>
-              {data.stores.map((s) => (
-                <th key={s} style={thStyle}>{s}</th>
-              ))}
-              <th style={thStyle}>Min</th>
-              <th style={thStyle}>Max</th>
-              <th style={{ ...thStyle, minWidth: 80 }}>Spread</th>
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((p, i) => {
-              const spreadColor = p.spread_pct >= 10 ? "var(--red)" : p.spread_pct >= 3 ? "var(--orange)" : "var(--green)";
-              return (
-                <tr key={`${p.canonical_name}-${i}`} style={{ borderTop: "1px solid var(--border)" }}>
-                  <td style={{ ...tdStyle, fontWeight: 600 }}>{p.canonical_name}</td>
-                  {data.stores.map((s) => {
-                    const cell = p.prices[s];
-                    if (!cell || cell.pret == null) {
-                      return <td key={s} style={{ ...tdStyle, textAlign: "center", color: "var(--muted)", opacity: 0.4 }}>—</td>;
-                    }
-                    const isMin = cell.pret === p.min_price && p.spread_pct > 0;
-                    const isMax = cell.pret === p.max_price && p.spread_pct > 0;
-                    return (
-                      <td key={s} style={{
-                        ...tdStyle, textAlign: "right", fontVariantNumeric: "tabular-nums",
-                        fontWeight: isMin || isMax ? 700 : 500,
-                        color: isMin ? "var(--green)" : isMax ? "var(--red)" : "var(--text)",
-                      }} title={cell.prod}>
-                        {fmtPrice(cell.pret)}
-                      </td>
-                    );
-                  })}
-                  <td style={{ ...tdStyle, textAlign: "right", color: "var(--green)", fontWeight: 600 }}>
-                    {fmtPrice(p.min_price)}
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: "right", color: "var(--red)", fontWeight: 600 }}>
-                    {fmtPrice(p.max_price)}
-                  </td>
-                  <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: spreadColor }}>
-                    {p.spread_pct.toFixed(1)}%
-                  </td>
-                </tr>
-              );
-            })}
-            {filtered.length === 0 && (
-              <tr>
-                <td colSpan={data.stores.length + 4} style={{ padding: 30, textAlign: "center", color: "var(--muted)" }}>
-                  Niciun produs găsit
+      {filtered.length === 0 ? (
+        <div style={{ padding: 30, textAlign: "center", color: "var(--muted)", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8 }}>
+          Niciun produs găsit
+        </div>
+      ) : sections.mode === "sika" ? (
+        <>
+          {sections.tmGroups.map((g, gi) => (
+            <div key={g.label} style={{ marginBottom: 14 }}>
+              <CollapsibleBlock title={g.label} subtitle={`(${g.products.length} produse)`}>
+                <ProductTable
+                  tableRef={gi === 0 ? tableRef : undefined}
+                  stores={data.stores}
+                  products={g.products}
+                />
+              </CollapsibleBlock>
+            </div>
+          ))}
+        </>
+      ) : (
+        <>
+          {sections.epsGroups.length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <CollapsibleBlock title="EPS" subtitle={`${sections.epsGroups.reduce((s, g) => s + g.products.length, 0)} produse`}>
+                {sections.epsGroups.map((g, gi) => (
+                  <div key={g.key} style={{ marginBottom: 10 }}>
+                    <CollapsibleBlock
+                      title={g.label}
+                      subtitle={`(${g.products.length} produse)`}
+                      level={1}
+                    >
+                      <ProductTable
+                        tableRef={gi === 0 ? tableRef : undefined}
+                        stores={data.stores}
+                        products={g.products}
+                      />
+                    </CollapsibleBlock>
+                  </div>
+                ))}
+              </CollapsibleBlock>
+            </div>
+          )}
+
+          {sections.rest.length > 0 && (
+            <div>
+              <CollapsibleBlock title="Alte produse" subtitle={`(${sections.rest.length} produse)`}>
+                <ProductTable
+                  tableRef={sections.epsGroups.length === 0 ? tableRef : undefined}
+                  stores={data.stores}
+                  products={sections.rest}
+                />
+              </CollapsibleBlock>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+function ProductTable({
+  tableRef,
+  stores,
+  products,
+}: {
+  tableRef?: React.RefObject<HTMLTableElement>;
+  stores: string[];
+  products: ProductRow[];
+}) {
+  return (
+    <div style={{ overflowX: "auto", background: "var(--card)", border: "1px solid var(--border)", borderRadius: 8 }}>
+      <table ref={tableRef} style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <thead>
+          <tr style={{ background: "var(--bg-elevated)" }}>
+            <th style={{ ...thStyle, textAlign: "left", minWidth: 200 }}>Produs</th>
+            {stores.map((s) => (
+              <th key={s} style={thStyle}>{s}</th>
+            ))}
+            <th style={thStyle}>Min</th>
+            <th style={thStyle}>Max</th>
+            <th style={{ ...thStyle, minWidth: 80 }}>Spread</th>
+          </tr>
+        </thead>
+        <tbody>
+          {products.map((p, i) => {
+            const spreadColor = p.spread_pct >= 10 ? "var(--red)" : p.spread_pct >= 3 ? "var(--orange)" : "var(--green)";
+            return (
+              <tr key={`${p.canonical_name}-${i}`} style={{ borderTop: "1px solid var(--border)" }}>
+                <td style={{ ...tdStyle, fontWeight: 600 }}>{p.canonical_name}</td>
+                {stores.map((s) => {
+                  const cell = p.prices[s];
+                  if (!cell || cell.pret == null) {
+                    return <td key={s} style={{ ...tdStyle, textAlign: "center", color: "var(--muted)", opacity: 0.4 }}>—</td>;
+                  }
+                  const isMin = cell.pret === p.min_price && p.spread_pct > 0;
+                  const isMax = cell.pret === p.max_price && p.spread_pct > 0;
+                  return (
+                    <td key={s} style={{
+                      ...tdStyle, textAlign: "right", fontVariantNumeric: "tabular-nums",
+                      fontWeight: isMin || isMax ? 700 : 500,
+                      color: isMin ? "var(--green)" : isMax ? "var(--red)" : "var(--text)",
+                    }} title={cell.prod}>
+                      {fmtPrice(cell.pret)}
+                    </td>
+                  );
+                })}
+                <td style={{ ...tdStyle, textAlign: "right", color: "var(--green)", fontWeight: 600 }}>
+                  {fmtPrice(p.min_price)}
+                </td>
+                <td style={{ ...tdStyle, textAlign: "right", color: "var(--red)", fontWeight: 600 }}>
+                  {fmtPrice(p.max_price)}
+                </td>
+                <td style={{ ...tdStyle, textAlign: "right", fontWeight: 700, color: spreadColor }}>
+                  {p.spread_pct.toFixed(1)}%
                 </td>
               </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { useCompanyScope, type CompanyScope } from "../../shared/ui/CompanyScopeProvider";
 import { ApiError } from "../../shared/api";
-import { getTarghet } from "./api";
+import { getTarghet, putGrowthPct } from "./api";
 import type { TgtAgentRow, TgtMonthCell, TgtResponse, TgtScope } from "./types";
 
 const MONTHS_RO = [
@@ -75,11 +75,16 @@ export default function TarghetPage() {
   const { scope: companyScope } = useCompanyScope();
   const apiScope = scopeFromCompany(companyScope);
   const [year, setYear] = useState<number>(() => new Date().getFullYear());
-  const [targetPct, setTargetPct] = useState<number>(10);
-  const [pctDraft, setPctDraft] = useState<string>("10");
   const [data, setData] = useState<TgtResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Draft per-month pct editabil pe SIKADP (persistă la PUT → se aplică peste tot).
+  const [pctDraft, setPctDraft] = useState<Record<number, string>>({});
+  const [pctDirty, setPctDirty] = useState<Set<number>>(new Set());
+  const [saving, setSaving] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
+  const canEditPct = apiScope === "sikadp";
 
   // Selectie luni
   const [monthMode, setMonthMode] = useState<MonthMode>("ytd");
@@ -89,19 +94,76 @@ export default function TarghetPage() {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    getTarghet({ scope: apiScope, year, targetPct })
-      .then((r) => { if (!cancelled) setData(r); })
+    getTarghet({ scope: apiScope, year })
+      .then((r) => {
+        if (cancelled) return;
+        setData(r);
+        const draft: Record<number, string> = {};
+        for (const it of r.growthPct) {
+          draft[it.month] = String(toNum(it.pct));
+        }
+        setPctDraft(draft);
+        setPctDirty(new Set());
+      })
       .catch((err) => {
         if (!cancelled)
           setError(err instanceof ApiError ? err.message : "Eroare la încărcare");
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [apiScope, year, targetPct]);
+  }, [apiScope, year]);
 
-  function applyPct() {
-    const v = Number(pctDraft);
-    if (Number.isFinite(v)) setTargetPct(v);
+  // Map pct per lună — folosit pentru calcul grand filtrat.
+  const pctByMonth = useMemo((): Map<number, number> => {
+    const m = new Map<number, number>();
+    if (!data) return m;
+    for (const it of data.growthPct) {
+      m.set(it.month, toNum(it.pct));
+    }
+    return m;
+  }, [data]);
+
+  function patchPct(month: number, value: string) {
+    setPctDraft((prev) => ({ ...prev, [month]: value }));
+    setPctDirty((prev) => new Set(prev).add(month));
+  }
+
+  async function saveAllPct() {
+    if (pctDirty.size === 0) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const items = Array.from(pctDirty).map((m) => ({
+        month: m, pct: pctDraft[m] || "0",
+      }));
+      await putGrowthPct(year, items);
+      // Reîncarcă targhetul cu noile procente aplicate.
+      const fresh = await getTarghet({ scope: apiScope, year });
+      setData(fresh);
+      const draft: Record<number, string> = {};
+      for (const it of fresh.growthPct) {
+        draft[it.month] = String(toNum(it.pct));
+      }
+      setPctDraft(draft);
+      setPctDirty(new Set());
+      setFlash("Procente salvate");
+      setTimeout(() => setFlash(null), 1500);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : "Eroare la salvare");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function applyAllMonths(value: string) {
+    const next: Record<number, string> = {};
+    const dirty = new Set<number>();
+    for (let m = 1; m <= 12; m++) {
+      next[m] = value;
+      dirty.add(m);
+    }
+    setPctDraft(next);
+    setPctDirty(dirty);
   }
 
   function toggleMonth(m: number) {
@@ -127,21 +189,23 @@ export default function TarghetPage() {
     return customMonths;
   }, [monthMode, ytdMonths, customMonths]);
 
-  // Grand totals recalculate pentru lunile active
+  // Grand totals recalculate pentru lunile active — target per lună cu pct-ul ei.
   const filteredGrand = useMemo(() => {
     if (!data) return null;
-    const multiplier = (100 + targetPct) / 100;
-    let prevSales = 0, currSales = 0;
+    let prevSales = 0, currSales = 0, target = 0;
     for (const mt of data.monthTotals) {
       if (!activeMonths.has(mt.month)) continue;
-      prevSales += toNum(mt.prevSales);
-      currSales += toNum(mt.currSales);
+      const prev = toNum(mt.prevSales);
+      const curr = toNum(mt.currSales);
+      const pct = pctByMonth.get(mt.month) ?? 10;
+      prevSales += prev;
+      currSales += curr;
+      target += prev * (100 + pct) / 100;
     }
-    const target = prevSales * multiplier;
     const gap = currSales - target;
     const achievementPct = target > 0 ? (currSales / target) * 100 : 0;
-    return { currSales, target, gap, achievementPct };
-  }, [data, activeMonths, targetPct]);
+    return { currSales, target, gap, achievementPct, prevSales };
+  }, [data, activeMonths, pctByMonth]);
 
   return (
     <div style={styles.page}>
@@ -150,19 +214,6 @@ export default function TarghetPage() {
           {scopeLabel(apiScope)} — Targhet {data?.yearCurr ?? year} vs {data?.yearPrev ?? year - 1}
         </h1>
         <div style={styles.controls}>
-          <label style={styles.ctrlLabel}>
-            % creștere:
-            <input
-              type="number"
-              value={pctDraft}
-              onChange={(e) => setPctDraft(e.target.value)}
-              onBlur={applyPct}
-              onKeyDown={(e) => { if (e.key === "Enter") applyPct(); }}
-              step={1} min={-50} max={500}
-              style={styles.pctInput}
-            />
-            <span style={{ color: "var(--muted)" }}>%</span>
-          </label>
           <YearSelector value={year} onChange={setYear} />
         </div>
       </div>
@@ -201,6 +252,18 @@ export default function TarghetPage() {
         })}
       </div>
 
+      {canEditPct && (
+        <GrowthPctEditor
+          draft={pctDraft}
+          dirty={pctDirty}
+          saving={saving}
+          onPatch={patchPct}
+          onSave={saveAllPct}
+          onApplyAll={applyAllMonths}
+        />
+      )}
+
+      {flash && <div style={styles.flash}>{flash}</div>}
       {error && <div style={styles.error}>{error}</div>}
       {loading && !data && <div style={styles.loading}>Se încarcă…</div>}
 
@@ -224,10 +287,77 @@ export default function TarghetPage() {
           <AgentsTable
             agents={data.agents}
             activeMonths={activeMonths}
-            targetPct={targetPct}
+            pctByMonth={pctByMonth}
           />
         </>
       )}
+    </div>
+  );
+}
+
+function GrowthPctEditor({
+  draft, dirty, saving, onPatch, onSave, onApplyAll,
+}: {
+  draft: Record<number, string>;
+  dirty: Set<number>;
+  saving: boolean;
+  onPatch: (month: number, value: string) => void;
+  onSave: () => void;
+  onApplyAll: (value: string) => void;
+}) {
+  const [bulk, setBulk] = useState("10");
+  return (
+    <div style={styles.pctEditor}>
+      <div style={styles.pctRow}>
+        <span style={styles.pctLabel}>% creștere / lună:</span>
+        {MONTH_ABBR.map((ab, i) => {
+          const m = i + 1;
+          const isDirty = dirty.has(m);
+          return (
+            <label key={m} style={styles.pctCell}>
+              <span style={styles.pctMonth}>{ab}</span>
+              <input
+                data-raw="true"
+                type="number" step="0.5" min={-50} max={500}
+                value={draft[m] ?? ""}
+                onChange={(e) => onPatch(m, e.target.value)}
+                style={{
+                  ...styles.pctInput,
+                  borderColor: isDirty ? "#eab308" : "var(--border)",
+                  background: isDirty ? "rgba(234,179,8,0.08)" : "var(--bg-elevated)",
+                }}
+              />
+            </label>
+          );
+        })}
+      </div>
+      <div style={styles.pctActions}>
+        <label style={styles.bulkLabel}>
+          Aplică la toate:
+          <input
+            data-raw="true"
+            type="number" step="0.5" min={-50} max={500}
+            value={bulk}
+            onChange={(e) => setBulk(e.target.value)}
+            style={{ ...styles.pctInput, width: 64 }}
+          />
+          <button
+            data-wide="true" type="button"
+            onClick={() => onApplyAll(bulk)}
+            style={styles.bulkBtn}
+          >Aplică</button>
+        </label>
+        <button
+          data-wide="true" type="button"
+          onClick={onSave}
+          disabled={dirty.size === 0 || saving}
+          style={{
+            ...styles.saveBtn,
+            opacity: dirty.size > 0 && !saving ? 1 : 0.5,
+            cursor: dirty.size > 0 && !saving ? "pointer" : "default",
+          }}
+        >{saving ? "…" : `Salvează${dirty.size ? ` (${dirty.size})` : ""}`}</button>
+      </div>
     </div>
   );
 }
@@ -267,23 +397,25 @@ function ProgressBar({ pct }: { pct: number }) {
 }
 
 function AgentsTable({
-  agents, activeMonths, targetPct,
+  agents, activeMonths, pctByMonth,
 }: {
   agents: TgtAgentRow[];
   activeMonths: Set<number>;
-  targetPct: number;
+  pctByMonth: Map<number, number>;
 }) {
   const sortedMonths = Array.from(activeMonths).sort((a, b) => a - b);
-  const multiplier = (100 + targetPct) / 100;
 
   function filteredTotals(a: TgtAgentRow) {
-    let prev = 0, curr = 0;
+    let prev = 0, curr = 0, target = 0;
     for (const mc of a.months) {
       if (!activeMonths.has(mc.month)) continue;
-      prev += toNum(mc.prevSales);
-      curr += toNum(mc.currSales);
+      const p = toNum(mc.prevSales);
+      const c = toNum(mc.currSales);
+      const pct = pctByMonth.get(mc.month) ?? 10;
+      prev += p;
+      curr += c;
+      target += p * (100 + pct) / 100;
     }
-    const target = prev * multiplier;
     const gap = curr - target;
     const pct = target > 0 ? (curr / target) * 100 : 0;
     return { curr, target, gap, pct };
@@ -311,7 +443,12 @@ function AgentsTable({
               <th style={styles.thNum}>Gap</th>
               <th style={{ ...styles.thNum, minWidth: 150 }}>Achievement</th>
               {sortedMonths.map((m) => (
-                <th key={m} style={styles.thMonth}>{MONTHS_RO[m - 1]}</th>
+                <th key={m} style={styles.thMonth}>
+                  {MONTHS_RO[m - 1]}
+                  <div style={styles.thMonthPct}>
+                    {(pctByMonth.get(m) ?? 10).toFixed(0)}%
+                  </div>
+                </th>
               ))}
             </tr>
           </thead>
@@ -373,14 +510,49 @@ const styles: Record<string, React.CSSProperties> = {
     letterSpacing: -0.2,
   },
   controls: { display: "flex", alignItems: "center", gap: 12 },
-  ctrlLabel: {
-    display: "flex", alignItems: "center", gap: 6,
-    fontSize: 13, color: "var(--muted)",
+  pctEditor: {
+    background: "var(--card)", border: "1px solid var(--border)",
+    borderRadius: 8, padding: "10px 12px", marginBottom: 12,
+    display: "flex", flexDirection: "column", gap: 8,
+  },
+  pctRow: {
+    display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap",
+  },
+  pctLabel: {
+    fontSize: 12, color: "var(--muted)", fontWeight: 600,
+    textTransform: "uppercase", letterSpacing: 0.4, marginRight: 6,
+  },
+  pctCell: {
+    display: "flex", flexDirection: "column", alignItems: "center",
+    gap: 2,
+  },
+  pctMonth: {
+    fontSize: 10, color: "var(--muted)", textTransform: "uppercase",
+    letterSpacing: 0.3, fontWeight: 600,
   },
   pctInput: {
-    width: 64, padding: "6px 8px", fontSize: 13,
+    width: 52, padding: "4px 6px", fontSize: 12,
     background: "var(--bg-elevated)", color: "var(--text)",
-    border: "1px solid var(--border)", borderRadius: 6, textAlign: "right",
+    border: "1px solid var(--border)", borderRadius: 5, textAlign: "right",
+    fontVariantNumeric: "tabular-nums",
+  },
+  pctActions: {
+    display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+    justifyContent: "flex-end",
+  },
+  bulkLabel: {
+    display: "flex", alignItems: "center", gap: 6,
+    fontSize: 12, color: "var(--muted)",
+  },
+  bulkBtn: {
+    padding: "5px 12px", fontSize: 11, fontWeight: 600,
+    background: "var(--bg-elevated)", color: "var(--text)",
+    border: "1px solid var(--border)", borderRadius: 5, cursor: "pointer",
+  },
+  saveBtn: {
+    padding: "6px 16px", fontSize: 12, fontWeight: 600,
+    background: "var(--cyan)", color: "#000",
+    border: "none", borderRadius: 5,
   },
   yearSelect: {
     padding: "7px 12px", fontSize: 13,
@@ -390,6 +562,11 @@ const styles: Record<string, React.CSSProperties> = {
   error: {
     color: "var(--red)", padding: 12,
     background: "rgba(220, 38, 38, 0.08)", borderRadius: 6, marginBottom: 12,
+  },
+  flash: {
+    padding: "8px 12px", background: "rgba(34,197,94,0.1)",
+    border: "1px solid rgba(34,197,94,0.4)", color: "#86efac",
+    borderRadius: 6, fontSize: 12, marginBottom: 12,
   },
   loading: { color: "var(--muted)", padding: 12 },
   kpiRow: {
@@ -443,6 +620,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderBottom: "1px solid var(--border)",
     letterSpacing: 0.4, textTransform: "uppercase",
     whiteSpace: "nowrap", minWidth: 44,
+  },
+  thMonthPct: {
+    fontSize: 9, fontWeight: 500, color: "var(--cyan)",
+    letterSpacing: 0, textTransform: "none", marginTop: 1,
   },
   tdAgent: {
     padding: "7px 8px", fontSize: 13, color: "var(--text)",

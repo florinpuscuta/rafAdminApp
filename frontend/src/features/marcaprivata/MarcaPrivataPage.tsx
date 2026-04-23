@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import {
+  ArcElement,
   BarElement,
   CategoryScale,
   type ChartOptions,
@@ -11,18 +12,41 @@ import {
   Tooltip,
   type TooltipItem,
 } from "chart.js";
-import { Bar } from "react-chartjs-2";
+import { Bar, Pie } from "react-chartjs-2";
 
 import { ApiError } from "../../shared/api";
 import { getMarcaPrivata } from "./api";
 import type {
   MarcaPrivataResponse,
-  MPClientRow,
+  MPCategoryCell,
+  MPChainRow,
   MPMonthCell,
   MPYearTotals,
 } from "./types";
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Title, Tooltip, Legend);
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+);
+
+// Culori canonice per rețea — aliniate cu paleta din feature-urile KA
+// (pret3net, preturi-comparative). "Alte" primește un gri neutru.
+const CHAIN_COLORS: Record<string, string> = {
+  Dedeman: "#22c55e",
+  Altex: "#ef4444",
+  "Leroy Merlin": "#3b82f6",
+  Hornbach: "#f59e0b",
+  Alte: "#94a3b8",
+};
+
+function chainColor(name: string): string {
+  return CHAIN_COLORS[name] ?? "#94a3b8";
+}
 
 function toNum(v: string | number | null | undefined): number {
   if (v == null) return 0;
@@ -117,12 +141,16 @@ export default function MarcaPrivataPage() {
             yearCurr={data.yearCurr}
           />
 
-          {data.clients.length > 0 && (
-            <ClientsCard
-              clients={data.clients}
+          {data.chains.length > 0 && (
+            <ChainsCard
+              chains={data.chains}
               yearPrev={data.yearPrev}
               yearCurr={data.yearCurr}
             />
+          )}
+
+          {data.chains.length > 0 && (
+            <SharePiesCard chains={data.chains} yearCurr={data.yearCurr} />
           )}
         </>
       )}
@@ -229,23 +257,32 @@ function MonthlyCard({
   );
 }
 
-function ClientsCard({
-  clients,
+function ChainsCard({
+  chains,
   yearPrev,
   yearCurr,
 }: {
-  clients: MPClientRow[];
+  chains: MPChainRow[];
   yearPrev: number;
   yearCurr: number;
 }) {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(chains.map((c) => [c.chain, true])),
+  );
+
+  function toggle(chain: string) {
+    setExpanded((prev) => ({ ...prev, [chain]: !prev[chain] }));
+  }
+
   return (
     <div style={styles.card}>
       <div style={styles.cardHeader}>
-        <h2 style={styles.cardTitle}>Clienti Marca Privată</h2>
+        <h2 style={styles.cardTitle}>Clienți cu evoluție comparativă</h2>
       </div>
       <table style={styles.table}>
         <thead>
           <tr>
+            <th style={{ ...styles.th, width: 32 }} aria-label="toggle"></th>
             <th style={styles.th}>CLIENT</th>
             <th style={styles.thNum}>{yearPrev}</th>
             <th style={styles.thNum}>{yearCurr}</th>
@@ -254,23 +291,223 @@ function ClientsCard({
           </tr>
         </thead>
         <tbody>
-          {clients.map((c) => (
-            <tr key={c.client}>
-              <td style={styles.td}>{c.client}</td>
-              <td style={styles.tdNum}>{fmtRo(toNum(c.salesY1))}</td>
-              <td style={styles.tdNum}>{fmtRo(toNum(c.salesY2))}</td>
-              <td style={styles.tdNum}>
-                <DiffPill value={toNum(c.diff)} />
-              </td>
-              <td style={styles.tdNum}>
-                <PctBadge tone={pctTone(c.pct)} size="md">
-                  {fmtPctSigned(c.pct) ?? "—"}
-                </PctBadge>
-              </td>
-            </tr>
-          ))}
+          {chains.map((c) => {
+            const isOpen = expanded[c.chain] ?? true;
+            return (
+              <ChainRowView
+                key={c.chain}
+                chain={c}
+                isOpen={isOpen}
+                onToggle={() => toggle(c.chain)}
+              />
+            );
+          })}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function ChainRowView({
+  chain,
+  isOpen,
+  onToggle,
+}: {
+  chain: MPChainRow;
+  isOpen: boolean;
+  onToggle: () => void;
+}) {
+  const color = chainColor(chain.chain);
+  return (
+    <>
+      <tr>
+        <td style={{ ...styles.td, textAlign: "center", padding: "4px 0" }}>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={isOpen}
+            aria-label={isOpen ? "Colapsează" : "Extinde"}
+            style={styles.toggleBtn}
+          >
+            <span
+              style={{
+                display: "inline-block",
+                transform: isOpen ? "rotate(90deg)" : "rotate(0deg)",
+                transition: "transform 0.12s ease",
+                fontSize: 10,
+                color: "var(--muted)",
+              }}
+              aria-hidden
+            >
+              ▸
+            </span>
+          </button>
+        </td>
+        <td style={{ ...styles.td, fontWeight: 600 }}>
+          <span
+            style={{
+              display: "inline-block",
+              width: 10,
+              height: 10,
+              borderRadius: 2,
+              background: color,
+              marginRight: 8,
+              verticalAlign: "middle",
+            }}
+            aria-hidden
+          />
+          {chain.chain}
+        </td>
+        <td style={styles.tdNum}>{fmtRo(toNum(chain.salesY1))}</td>
+        <td style={styles.tdNum}>{fmtRo(toNum(chain.salesY2))}</td>
+        <td style={styles.tdNum}>
+          <DiffPill value={toNum(chain.diff)} />
+        </td>
+        <td style={styles.tdNum}>
+          <PctBadge tone={pctTone(chain.pct)} size="md">
+            {fmtPctSigned(chain.pct) ?? "—"}
+          </PctBadge>
+        </td>
+      </tr>
+      {isOpen &&
+        chain.categories.map((cat) => (
+          <CategoryRowView key={cat.code} cat={cat} />
+        ))}
+    </>
+  );
+}
+
+function CategoryRowView({ cat }: { cat: MPCategoryCell }) {
+  return (
+    <tr style={styles.categoryRow}>
+      <td style={styles.tdSub}></td>
+      <td style={{ ...styles.tdSub, paddingLeft: 32, color: "var(--muted)" }}>
+        {cat.label}
+      </td>
+      <td style={styles.tdSubNum}>{fmtRo(toNum(cat.salesY1))}</td>
+      <td style={styles.tdSubNum}>{fmtRo(toNum(cat.salesY2))}</td>
+      <td style={styles.tdSubNum}>
+        <DiffPill value={toNum(cat.diff)} />
+      </td>
+      <td style={styles.tdSubNum}>
+        <PctBadge tone={pctTone(cat.pct)} size="md">
+          {fmtPctSigned(cat.pct) ?? "—"}
+        </PctBadge>
+      </td>
+    </tr>
+  );
+}
+
+function SharePiesCard({
+  chains,
+  yearCurr,
+}: {
+  chains: MPChainRow[];
+  yearCurr: number;
+}) {
+  // Pentru fiecare categorie (MU, EPS, UMEDE) facem plăcintă cu share-ul
+  // fiecărei rețele din total marca privată pe acea categorie, an curent.
+  const codes = chains[0]?.categories.map((c) => c.code) ?? [];
+  const labels: Record<string, string> = {};
+  for (const c of chains[0]?.categories ?? []) labels[c.code] = c.label;
+
+  return (
+    <div style={styles.card}>
+      <div style={styles.cardHeader}>
+        <h2 style={styles.cardTitle}>
+          Share per client în total Marca Privată ({yearCurr})
+        </h2>
+      </div>
+      <div style={styles.piesGrid}>
+        {codes.map((code) => (
+          <SharePie
+            key={code}
+            title={labels[code] ?? code}
+            chains={chains}
+            catCode={code}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SharePie({
+  title,
+  chains,
+  catCode,
+}: {
+  title: string;
+  chains: MPChainRow[];
+  catCode: string;
+}) {
+  const slices = chains
+    .map((c) => {
+      const cat = c.categories.find((k) => k.code === catCode);
+      return {
+        chain: c.chain,
+        value: toNum(cat?.salesY2),
+        color: chainColor(c.chain),
+      };
+    })
+    .filter((s) => s.value > 0);
+
+  const total = slices.reduce((s, x) => s + x.value, 0);
+
+  if (total <= 0) {
+    return (
+      <div style={styles.pieCell}>
+        <div style={styles.pieTitle}>{title}</div>
+        <div style={styles.pieEmpty}>Fără vânzări în {title}.</div>
+      </div>
+    );
+  }
+
+  const root = typeof window !== "undefined" ? document.documentElement : null;
+  const cs = root ? getComputedStyle(root) : null;
+  const text = cs?.getPropertyValue("--text").trim() || "#1f2937";
+
+  const data = {
+    labels: slices.map((s) => s.chain),
+    datasets: [
+      {
+        data: slices.map((s) => s.value),
+        backgroundColor: slices.map((s) => s.color),
+        borderColor: "var(--card)",
+        borderWidth: 1,
+      },
+    ],
+  };
+
+  const options: ChartOptions<"pie"> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: "bottom" as const,
+        labels: { color: text, boxWidth: 12, boxHeight: 12, font: { size: 11 } },
+      },
+      tooltip: {
+        callbacks: {
+          label: (ctx: TooltipItem<"pie">) => {
+            const v = Number(ctx.parsed ?? 0);
+            const pct = total > 0 ? (v / total) * 100 : 0;
+            return `${ctx.label}: ${fmtRo(v)} (${pct.toFixed(1)}%)`;
+          },
+        },
+      },
+    },
+  };
+
+  return (
+    <div style={styles.pieCell}>
+      <div style={styles.pieTitle}>
+        {title}
+        <span style={styles.pieTotal}> · {fmtRo(total)}</span>
+      </div>
+      <div style={styles.pieBox}>
+        <Pie data={data} options={options} />
+      </div>
     </div>
   );
 }
@@ -525,6 +762,33 @@ const styles: Record<string, React.CSSProperties> = {
     fontVariantNumeric: "tabular-nums",
     whiteSpace: "nowrap",
   },
+  categoryRow: {
+    background: "rgba(148,163,184,0.05)",
+  },
+  tdSub: {
+    padding: "5px 8px",
+    fontSize: 12,
+    color: "var(--text)",
+    borderBottom: "1px dashed var(--border)",
+    whiteSpace: "nowrap",
+  },
+  tdSubNum: {
+    padding: "5px 8px",
+    fontSize: 12,
+    color: "var(--muted)",
+    borderBottom: "1px dashed var(--border)",
+    textAlign: "right",
+    fontVariantNumeric: "tabular-nums",
+    whiteSpace: "nowrap",
+  },
+  toggleBtn: {
+    background: "transparent",
+    border: "none",
+    padding: "2px 6px",
+    cursor: "pointer",
+    color: "var(--muted)",
+    lineHeight: 1,
+  },
   totalRow: {
     background: "var(--accent-soft)",
   },
@@ -559,5 +823,41 @@ const styles: Record<string, React.CSSProperties> = {
     minWidth: 0,
     height: "100%",
     minHeight: 240,
+  },
+  piesGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+    gap: 16,
+  },
+  pieCell: {
+    minWidth: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: 8,
+    padding: 8,
+    border: "1px solid var(--border)",
+    borderRadius: 6,
+    background: "var(--bg-elevated)",
+  },
+  pieTitle: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: "var(--text)",
+    textAlign: "center",
+  },
+  pieTotal: {
+    fontSize: 11,
+    fontWeight: 500,
+    color: "var(--muted)",
+  },
+  pieBox: {
+    height: 260,
+    minHeight: 260,
+  },
+  pieEmpty: {
+    color: "var(--muted)",
+    fontSize: 12,
+    padding: 20,
+    textAlign: "center",
   },
 };

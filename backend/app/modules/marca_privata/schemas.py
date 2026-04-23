@@ -22,14 +22,22 @@ class MPMonthCell(APISchema):
     pct: Decimal | None = None
 
 
-class MPClientRow(APISchema):
-    client: str
+class MPCategoryCell(APISchema):
+    code: str            # "MU" | "EPS" | "UMEDE"
+    label: str           # "Mortare Uscate" | "EPS" | "Umede"
     sales_y1: Decimal
     sales_y2: Decimal
-    qty_y1: Decimal
-    qty_y2: Decimal
     diff: Decimal
     pct: Decimal | None = None
+
+
+class MPChainRow(APISchema):
+    chain: str           # "Dedeman" | "Altex" | "Leroy Merlin" | "Hornbach" | "Alte"
+    sales_y1: Decimal
+    sales_y2: Decimal
+    diff: Decimal
+    pct: Decimal | None = None
+    categories: list[MPCategoryCell] = Field(default_factory=list)
 
 
 class MPResponse(APISchema):
@@ -38,5 +46,5 @@ class MPResponse(APISchema):
     year_prev: int
     last_update: datetime | None = None
     months: list[MPMonthCell] = Field(default_factory=list)   # 12 items
-    clients: list[MPClientRow] = Field(default_factory=list)
+    chains: list[MPChainRow] = Field(default_factory=list)
     grand_totals: MPYearTotals

@@ -57,3 +57,25 @@ export interface ArboreProduseResponse {
   ytdMonths: number[];
   selectedMonths: number[];
 }
+
+export interface TreeClient {
+  chain: string;
+  sales: string;
+  qty: string;
+  salesPrev: string;
+  qtyPrev: string;
+  categories: TreeCategory[];
+}
+
+export interface ArboreClientiResponse {
+  scope: string;
+  year: number;
+  lastUpdate: string | null;
+  clients: TreeClient[];
+  grandSales: string;
+  grandQty: string;
+  grandSalesPrev: string;
+  grandQtyPrev: string;
+  ytdMonths: number[];
+  selectedMonths: number[];
+}

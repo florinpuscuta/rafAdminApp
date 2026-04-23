@@ -190,6 +190,7 @@ async def pret3net(
                 clients={k: Pret3NetClient(**v) for k, v in p["clients"].items()},
                 total_sales=p["total_sales"],
                 total_qty=p["total_qty"],
+                is_private_label=p.get("is_private_label", False),
             )
             for p in prods
         ]

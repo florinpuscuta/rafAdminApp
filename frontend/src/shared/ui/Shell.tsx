@@ -120,6 +120,28 @@ function buildSikadpTree(): NavItem[] {
       ],
     },
     { kind: "divider" },
+    { kind: "leaf", to: "/evaluare", label: "📊 Evaluare", end: true },
+    {
+      kind: "parent",
+      id: "evaluare-input",
+      label: "Evaluare · Input Date",
+      children: [
+        { kind: "leaf", to: "/evaluare/sal-fix", label: "Imput sal fix" },
+        { kind: "leaf", to: "/evaluare/input-lunar", label: "Input Lunar Agent" },
+        { kind: "leaf", to: "/evaluare/zona-agent", label: "Imput bonus magazin" },
+      ],
+    },
+    {
+      kind: "parent",
+      id: "evaluare-analiza",
+      label: "Evaluare · Analiza",
+      children: [
+        { kind: "leaf", to: "/evaluare/matricea", label: "Matricea Agenți" },
+        { kind: "leaf", to: "/evaluare/zona-detaliu", label: "Detaliu Zonă" },
+        { kind: "leaf", to: "/evaluare/zona-ranking", label: "Ranking Zone" },
+      ],
+    },
+    { kind: "divider" },
     {
       kind: "parent",
       id: "taskuri",

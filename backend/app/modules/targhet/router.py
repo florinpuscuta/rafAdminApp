@@ -11,6 +11,9 @@ from app.modules.auth.deps import get_current_tenant_id
 from app.modules.targhet import service as svc
 from app.modules.targhet.schemas import (
     TgtAgentRow,
+    TgtGrowthItem,
+    TgtGrowthList,
+    TgtGrowthUpsert,
     TgtMonthCell,
     TgtMonthTotal,
     TgtResponse,
@@ -35,6 +38,7 @@ def _month_cell_to_model(c: svc.MonthCell) -> TgtMonthCell:
         prev_sales=c.prev_sales,
         curr_sales=c.curr_sales,
         target=c.target,
+        target_pct=c.target_pct,
         gap=c.gap,
         achievement_pct=c.achievement_pct,
     )
@@ -59,9 +63,8 @@ def _agent_to_model(a: svc.AgentTarget) -> TgtAgentRow:
 
 def _build_response(scope: str, data: dict) -> TgtResponse:
     agent_rows = [_agent_to_model(a) for a in data["agents"]]
-    target_pct: Decimal = data["target_pct"]
+    pct_by_month: dict[int, Decimal] = data["pct_by_month"]
 
-    # Totaluri per lună (peste toți agenții)
     per_month_prev: dict[int, Decimal] = {m: Decimal(0) for m in range(1, 13)}
     per_month_curr: dict[int, Decimal] = {m: Decimal(0) for m in range(1, 13)}
     for ar in agent_rows:
@@ -69,12 +72,15 @@ def _build_response(scope: str, data: dict) -> TgtResponse:
             per_month_prev[mc.month] += mc.prev_sales
             per_month_curr[mc.month] += mc.curr_sales
 
-    multiplier = (Decimal(100) + target_pct) / Decimal(100)
     month_totals: list[TgtMonthTotal] = []
+    grand_prev = Decimal(0)
+    grand_curr = Decimal(0)
+    grand_target = Decimal(0)
     for m in range(1, 13):
         prev = per_month_prev[m]
         curr = per_month_curr[m]
-        target = prev * multiplier
+        pct = pct_by_month.get(m, svc.DEFAULT_TARGET_PCT)
+        target = prev * (Decimal(100) + pct) / Decimal(100)
         gap = curr - target
         month_totals.append(
             TgtMonthTotal(
@@ -83,21 +89,24 @@ def _build_response(scope: str, data: dict) -> TgtResponse:
                 prev_sales=prev,
                 curr_sales=curr,
                 target=target,
+                target_pct=pct,
                 gap=gap,
                 achievement_pct=_achievement_pct(curr, target),
             )
         )
+        grand_prev += prev
+        grand_curr += curr
+        grand_target += target
 
-    grand_prev = sum((t.prev_sales for t in month_totals), Decimal(0))
-    grand_curr = sum((t.curr_sales for t in month_totals), Decimal(0))
-    grand_target = grand_prev * multiplier
-    grand_gap = grand_curr - grand_target
+    growth_list = [
+        TgtGrowthItem(year=data["year_curr"], month=m, pct=pct_by_month.get(m, svc.DEFAULT_TARGET_PCT))
+        for m in range(1, 13)
+    ]
 
     return TgtResponse(
         scope=scope,
         year_curr=data["year_curr"],
         year_prev=data["year_prev"],
-        target_pct=target_pct,
         last_update=data["last_update"],
         agents=agent_rows,
         month_totals=month_totals,
@@ -105,9 +114,10 @@ def _build_response(scope: str, data: dict) -> TgtResponse:
             prev_sales=grand_prev,
             curr_sales=grand_curr,
             target=grand_target,
-            gap=grand_gap,
+            gap=grand_curr - grand_target,
             achievement_pct=_achievement_pct(grand_curr, grand_target),
         ),
+        growth_pct=growth_list,
     )
 
 
@@ -119,10 +129,6 @@ async def get_targhet(
         None, ge=1, le=12,
         description="Acceptat pentru paritate cu celelalte endpoint-uri; "
                     "targhetul întotdeauna returnează cele 12 luni.",
-    ),
-    target_pct: float | None = Query(
-        None, ge=-50, le=500,
-        description="Procent creștere față de an precedent. Default: 10.",
     ),
     tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
@@ -136,17 +142,43 @@ async def get_targhet(
 
     now = datetime.now(timezone.utc)
     year_curr = year or now.year
-    # `month` e acceptat pentru API parity (vz_la_zi îl folosește), însă
-    # targhetul arată toate cele 12 luni.
     _ = month
 
-    pct = Decimal(str(target_pct)) if target_pct is not None else svc.DEFAULT_TARGET_PCT
-
     if scope == "adp":
-        data = await svc.get_for_adp(session, tenant_id, year_curr=year_curr, target_pct=pct)
+        data = await svc.get_for_adp(session, tenant_id, year_curr=year_curr)
     elif scope == "sika":
-        data = await svc.get_for_sika(session, tenant_id, year_curr=year_curr, target_pct=pct)
+        data = await svc.get_for_sika(session, tenant_id, year_curr=year_curr)
     else:
-        data = await svc.get_for_sikadp(session, tenant_id, year_curr=year_curr, target_pct=pct)
+        data = await svc.get_for_sikadp(session, tenant_id, year_curr=year_curr)
 
     return _build_response(scope, data)
+
+
+@router.get("/growth-pct", response_model=TgtGrowthList)
+async def get_growth_pct(
+    year: int = Query(..., ge=2000, le=2100),
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    m = await svc.load_growth_pct_map(session, tenant_id, year=year)
+    return TgtGrowthList(
+        year=year,
+        items=[TgtGrowthItem(year=year, month=mo, pct=m[mo]) for mo in range(1, 13)],
+    )
+
+
+@router.put("/growth-pct", response_model=TgtGrowthList)
+async def put_growth_pct(
+    payload: TgtGrowthUpsert,
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    items = [(it.month, it.pct) for it in payload.items]
+    m = await svc.upsert_growth_pct(
+        session, tenant_id=tenant_id, year=payload.year, items=items,
+    )
+    await session.commit()
+    return TgtGrowthList(
+        year=payload.year,
+        items=[TgtGrowthItem(year=payload.year, month=mo, pct=m[mo]) for mo in range(1, 13)],
+    )

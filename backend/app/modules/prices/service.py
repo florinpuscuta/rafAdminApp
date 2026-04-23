@@ -78,6 +78,9 @@ async def compare_ka_vs_tt(
     `min_qty` filtrează buckets cu volum prea mic (default 0.01 → permite tot).
     Crescut la 10+ în UI pentru medii mai credibile.
     """
+    from app.modules.brands.models import Brand
+    from app.modules.products.models import Product
+
     # Expresii reutilizabile
     ka_when_sales = case((_is_ka_channel(RawSale.channel), RawSale.amount), else_=0)
     ka_when_qty = case((_is_ka_channel(RawSale.channel), RawSale.quantity), else_=0)
@@ -101,7 +104,10 @@ async def compare_ka_vs_tt(
             func.sum(ka_when_qty).label("ka_qty"),
             func.sum(tt_when_sales).label("tt_sales"),
             func.sum(tt_when_qty).label("tt_qty"),
+            func.bool_or(Brand.is_private_label).label("is_private_label"),
         )
+        .outerjoin(Product, Product.id == RawSale.product_id)
+        .outerjoin(Brand, Brand.id == Product.brand_id)
         .where(
             RawSale.tenant_id == tenant_id,
             RawSale.product_name.is_not(None),
@@ -171,6 +177,7 @@ async def compare_ka_vs_tt(
             "tt_sales": tt_sales_v,
             "delta_abs": delta_abs,
             "delta_pct": delta_pct,
+            "is_private_label": bool(r.is_private_label),
         })
     return rows
 
@@ -368,6 +375,9 @@ async def pret3net(
       - sika     → doar batch-uri `sika_xlsx` / `sika_mtd_xlsx`
       - sikadp   → fără filtru (ambele)
     """
+    from app.modules.brands.models import Brand
+    from app.modules.products.models import Product
+
     ka_key = _ka_client_case().label("ka_key")
     stmt = select(
         RawSale.category_code.label("category"),
@@ -375,6 +385,11 @@ async def pret3net(
         ka_key,
         func.sum(RawSale.amount).label("sales"),
         func.sum(RawSale.quantity).label("qty"),
+        func.bool_or(Brand.is_private_label).label("is_private_label"),
+    ).outerjoin(
+        Product, Product.id == RawSale.product_id,
+    ).outerjoin(
+        Brand, Brand.id == Product.brand_id,
     ).group_by(RawSale.category_code, RawSale.product_name, ka_key)
 
     stmt = _apply_ka_scope(stmt, tenant_id=tenant_id, year=year, months=months)
@@ -403,7 +418,10 @@ async def pret3net(
                 "clients": {},
                 "total_sales": Decimal(0),
                 "total_qty": Decimal(0),
+                "is_private_label": bool(r.is_private_label),
             }
+        elif r.is_private_label:
+            by_cat[cat][desc]["is_private_label"] = True
         sales_v = r.sales or Decimal(0)
         qty_v = r.qty or Decimal(0)
         price = (sales_v / qty_v) if qty_v > 0 else None
@@ -563,6 +581,9 @@ async def ka_vs_retail(
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """Top N produse vândute atât pe KA cât și Retail, cu prețuri medii."""
+    from app.modules.brands.models import Brand
+    from app.modules.products.models import Product
+
     ka_sales_expr = case((_is_ka_channel(RawSale.channel), RawSale.amount), else_=0)
     ka_qty_expr = case((_is_ka_channel(RawSale.channel), RawSale.quantity), else_=0)
     rt_sales_expr = case((_is_retail_channel(RawSale.channel), RawSale.amount), else_=0)
@@ -577,6 +598,11 @@ async def ka_vs_retail(
         func.sum(rt_sales_expr).label("rt_sales"),
         func.sum(rt_qty_expr).label("rt_qty"),
         (func.sum(ka_sales_expr) + func.sum(rt_sales_expr)).label("total_sales"),
+        func.bool_or(Brand.is_private_label).label("is_private_label"),
+    ).outerjoin(
+        Product, Product.id == RawSale.product_id,
+    ).outerjoin(
+        Brand, Brand.id == Product.brand_id,
     ).where(
         RawSale.tenant_id == tenant_id,
         RawSale.product_name.is_not(None),
@@ -627,6 +653,7 @@ async def ka_vs_retail(
             "retail_price": rt_price,
             "diff_pct": diff_pct,
             "total_sales": r.total_sales or Decimal(0),
+            "is_private_label": bool(r.is_private_label),
         })
     return rows
 

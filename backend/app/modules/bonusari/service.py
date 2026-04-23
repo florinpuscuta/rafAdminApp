@@ -170,7 +170,7 @@ async def _compute(
     agents = await _build_agents(
         session, tenant_id,
         year_curr=year_curr, batch_source_groups=batch_source_groups,
-        target_pct=Decimal(0),  # target_pct nu influențează calculul de bonus
+        pct_by_month={m: Decimal(0) for m in range(1, 13)},  # nu influențează bonus
     )
 
     now = datetime.now(timezone.utc)

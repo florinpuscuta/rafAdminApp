@@ -120,3 +120,30 @@ class GrupeProduseTreeResponse(APISchema):
     grand_qty_prev: Decimal = Decimal(0)
     ytd_months: list[int] = Field(default_factory=list)
     selected_months: list[int] = Field(default_factory=list)
+
+
+# ── Tree view: by client (chain/partener) ─────────────────────────────────
+
+
+class TreeClient(APISchema):
+    """Rețea parteneră (Dedeman, Altex, Leroy Merlin, Hornbach, Alte).
+    Structura internă este identică cu TreeBrand (categorii + subgrupe)."""
+    chain: str
+    sales: Decimal
+    qty: Decimal
+    sales_prev: Decimal = Decimal(0)
+    qty_prev: Decimal = Decimal(0)
+    categories: list[TreeCategory] = Field(default_factory=list)
+
+
+class GrupeProduseTreeByClientResponse(APISchema):
+    scope: str
+    year: int
+    last_update: datetime | None = None
+    clients: list[TreeClient] = Field(default_factory=list)
+    grand_sales: Decimal
+    grand_qty: Decimal
+    grand_sales_prev: Decimal = Decimal(0)
+    grand_qty_prev: Decimal = Decimal(0)
+    ytd_months: list[int] = Field(default_factory=list)
+    selected_months: list[int] = Field(default_factory=list)

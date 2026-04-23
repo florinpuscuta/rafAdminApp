@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "../../shared/api";
+import { CollapsibleBlock } from "../../shared/ui/CollapsibleBlock";
 import { useCompanyScope } from "../../shared/ui/CompanyScopeProvider";
 import { TableSkeleton } from "../../shared/ui/Skeleton";
 import { useToast } from "../../shared/ui/ToastProvider";
+import { groupByEpsSubgroup, isEpsCategory } from "../../shared/utils/epsSubgroup";
 import { downloadTableAsCsv } from "../../shared/utils/exportCsv";
+import { sikaTm } from "../../shared/utils/sikaTm";
 import {
   getPret3Net,
   loadDiscounts,
@@ -15,6 +18,7 @@ import type {
   Discount,
   DiscountConfig,
   Pret3NetFilters,
+  Pret3NetProduct,
   Pret3NetResponse,
 } from "./types";
 
@@ -123,15 +127,31 @@ export default function Pret3NetPage() {
     toast.success("Discounturi salvate local");
   }
 
+  const isSika = scope === "sika";
+
+  // La Sika regrupăm produsele pe TM (Target Market) — ignorăm category_code.
+  // La Adeplast păstrăm categoriile din backend.
+  const categoriesByTm = useMemo<Record<string, Pret3NetProduct[]>>(() => {
+    if (!data) return {};
+    if (!isSika) return data.categories;
+    const out: Record<string, Pret3NetProduct[]> = {};
+    for (const prods of Object.values(data.categories)) {
+      for (const p of prods) {
+        const tm = sikaTm(p.description);
+        if (!out[tm]) out[tm] = [];
+        out[tm].push(p);
+      }
+    }
+    return out;
+  }, [data, isSika]);
+
   const orderedCats = useMemo(() => {
-    if (!data) return [];
-    return Object.keys(data.categories).sort((a, b) => {
-      // Sortare: categoriile cu mai multe vânzări primul
-      const sa = (data.categories[a] || []).reduce((s, p) => s + Number(p.totalSales || 0), 0);
-      const sb = (data.categories[b] || []).reduce((s, p) => s + Number(p.totalSales || 0), 0);
+    return Object.keys(categoriesByTm).sort((a, b) => {
+      const sa = (categoriesByTm[a] || []).reduce((s, p) => s + Number(p.totalSales || 0), 0);
+      const sb = (categoriesByTm[b] || []).reduce((s, p) => s + Number(p.totalSales || 0), 0);
       return sb - sa;
     });
-  }, [data]);
+  }, [categoriesByTm]);
 
   const visibleCats = useMemo(() => {
     if (activeCategory === "ALL") return orderedCats;
@@ -256,7 +276,7 @@ export default function Pret3NetPage() {
               onClick={() => setActiveCategory(cat)}
               style={tabStyle(activeCategory === cat)}
             >
-              {cat} ({(data?.categories[cat] || []).length})
+              {cat} ({(categoriesByTm[cat] || []).length})
             </button>
           ))}
         </div>
@@ -264,59 +284,127 @@ export default function Pret3NetPage() {
 
       {loading && !data ? (
         <TableSkeleton rows={10} cols={kaClients.length * 2 + 2} />
+      ) : scope === "adeplast" ? (
+        <>
+          {renderBrandSection(visibleCats, categoriesByTm, false, "Adeplast")}
+          {renderBrandSection(visibleCats, categoriesByTm, true, "Marcă privată")}
+        </>
       ) : (
-        visibleCats.map((cat, idx) => {
-          const prods = data!.categories[cat] || [];
-          const applyDiscount = !NO_DISCOUNT_CATS.has(cat.toUpperCase());
-          return (
-            <div key={cat} style={styles.catBlock}>
-              <h3 style={{ margin: "0 0 8px", fontSize: 15 }}>{cat} <span style={{ color: "var(--fg-muted, #888)", fontSize: 12 }}>({prods.length} produse)</span></h3>
-              <div style={{ overflowX: "auto" }}>
-                <table ref={idx === 0 ? tableRef : undefined} style={styles.table}>
-                  <thead>
-                    <tr>
-                      <th style={th}>Produs</th>
-                      {kaClients.map((k) => (
-                        <th key={k} style={{ ...th, textAlign: "right", color: KA_COLORS[k] }}>
-                          {KA_LABELS[k] ?? k}
-                        </th>
-                      ))}
-                      <th style={{ ...th, textAlign: "right" }}>Vânzări</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {prods.map((p, i) => (
-                      <tr key={`${p.description}-${i}`}>
-                        <td style={td}>{p.description}</td>
-                        {kaClients.map((k) => {
-                          const c = p.clients[k];
-                          const raw = c?.price != null ? Number(c.price) : null;
-                          const net = raw != null && applyDiscount ? raw * kaNet[k] : raw;
-                          return (
-                            <td key={k} style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                              {fmtPrice(net)}
-                              {applyDiscount && raw != null && kaNet[k] < 1 && (
-                                <div style={{ fontSize: 10, color: "var(--fg-muted, #aaa)" }}>
-                                  brut {fmtPrice(raw)}
-                                </div>
-                              )}
-                            </td>
-                          );
-                        })}
-                        <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
-                          {fmtFull(p.totalSales)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          );
-        })
+        renderBrandSection(visibleCats, categoriesByTm, null)
       )}
     </div>
   );
+
+  function renderBrandSection(
+    cats: string[],
+    catsByTm: Record<string, Pret3NetProduct[]>,
+    plFilter: boolean | null,
+    brandLabel?: string,
+  ) {
+    const filtered: [string, Pret3NetProduct[]][] = cats
+      .map((cat): [string, Pret3NetProduct[]] => {
+        const all = catsByTm[cat] || [];
+        if (plFilter === null) return [cat, all];
+        return [cat, all.filter((p) => !!p.isPrivateLabel === plFilter)];
+      })
+      .filter(([, prods]) => prods.length > 0);
+
+    if (filtered.length === 0) return null;
+
+    const totalProds = filtered.reduce((s, [, p]) => s + p.length, 0);
+    const body = filtered.map(([cat, prods], idx) => renderCategoryBlock(cat, prods, idx));
+
+    if (brandLabel) {
+      return (
+        <div style={{ marginBottom: 14 }}>
+          <CollapsibleBlock title={brandLabel} subtitle={`${totalProds} produse`}>
+            {body}
+          </CollapsibleBlock>
+        </div>
+      );
+    }
+    return <>{body}</>;
+  }
+
+  function renderCategoryBlock(cat: string, prods: Pret3NetProduct[], idx: number) {
+    const applyDiscount = !NO_DISCOUNT_CATS.has(cat.toUpperCase());
+    // La Sika categoria e un TM → fără EPS subgroups.
+    const isEps = !isSika && isEpsCategory(cat);
+    const epsGroups = isEps
+      ? groupByEpsSubgroup(prods, (p) => p.description, (p) => p.totalSales)
+      : null;
+
+    const renderRow = (p: typeof prods[number], i: number) => (
+      <tr key={`${p.description}-${i}`}>
+        <td style={td}>{p.description}</td>
+        {kaClients.map((k) => {
+          const c = p.clients[k];
+          const raw = c?.price != null ? Number(c.price) : null;
+          const net = raw != null && applyDiscount ? raw * kaNet[k] : raw;
+          return (
+            <td key={k} style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+              {fmtPrice(net)}
+              {applyDiscount && raw != null && kaNet[k] < 1 && (
+                <div style={{ fontSize: 10, color: "var(--fg-muted, #aaa)" }}>
+                  brut {fmtPrice(raw)}
+                </div>
+              )}
+            </td>
+          );
+        })}
+        <td style={{ ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>
+          {fmtFull(p.totalSales)}
+        </td>
+      </tr>
+    );
+
+    const headerRow = (
+      <tr>
+        <th style={th}>Produs</th>
+        {kaClients.map((k) => (
+          <th key={k} style={{ ...th, textAlign: "right", color: KA_COLORS[k] }}>
+            {KA_LABELS[k] ?? k}
+          </th>
+        ))}
+        <th style={{ ...th, textAlign: "right" }}>Vânzări</th>
+      </tr>
+    );
+
+    return (
+      <div key={cat} style={styles.catBlock}>
+        <CollapsibleBlock
+          title={cat}
+          subtitle={`(${prods.length} produse)`}
+        >
+          {isEps && epsGroups ? (
+            epsGroups.map((g, gi) => (
+              <div key={g.key} style={styles.subBlock}>
+                <CollapsibleBlock
+                  title={g.label}
+                  subtitle={`${g.products.length} produse · ${fmtFull(g.totalSales)}`}
+                  level={1}
+                >
+                  <div style={{ overflowX: "auto" }}>
+                    <table ref={idx === 0 && gi === 0 ? tableRef : undefined} style={styles.table}>
+                      <thead>{headerRow}</thead>
+                      <tbody>{g.products.map(renderRow)}</tbody>
+                    </table>
+                  </div>
+                </CollapsibleBlock>
+              </div>
+            ))
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table ref={idx === 0 ? tableRef : undefined} style={styles.table}>
+                <thead>{headerRow}</thead>
+                <tbody>{prods.map(renderRow)}</tbody>
+              </table>
+            </div>
+          )}
+        </CollapsibleBlock>
+      </div>
+    );
+  }
 }
 
 function tabStyle(active: boolean): React.CSSProperties {
@@ -376,6 +464,13 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 6,
     padding: 12,
     marginBottom: 12,
+  },
+  subBlock: {
+    background: "var(--bg, #fafafa)",
+    border: "1px solid var(--border, #eee)",
+    borderRadius: 4,
+    padding: 8,
+    marginBottom: 8,
   },
   table: { borderCollapse: "collapse", width: "100%" },
 };

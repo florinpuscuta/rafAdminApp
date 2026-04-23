@@ -36,6 +36,7 @@ from app.modules.mappings.resolution import (
     resolve as resolve_canonical,
     store_agent_map,
 )
+from app.modules.product_categories.models import ProductCategory
 from app.modules.products.models import Product
 from app.modules.sales.models import ImportBatch, RawSale
 
@@ -51,6 +52,36 @@ def month_name(m: int) -> str:
 
 
 _GROUPS_ADP: list[list[str]] = [["sales_xlsx"]]
+
+# Categoriile afișate în breakdown-ul pe rețea. Ordinea e fixă (UI o urmează).
+CHAIN_CATEGORIES: list[tuple[str, str]] = [
+    ("MU", "Mortare Uscate"),
+    ("EPS", "EPS"),
+    ("UMEDE", "Umede"),
+]
+CHAIN_CATEGORY_CODES: list[str] = [c for c, _ in CHAIN_CATEGORIES]
+
+CHAIN_ORDER: list[str] = ["Dedeman", "Altex", "Leroy Merlin", "Hornbach", "Alte"]
+
+
+def _extract_chain(raw: str | None) -> str:
+    """Normalizează un `raw_sales.client` string la o rețea canonică.
+
+    Aliniat cu `grupe_produse._extract_chain_from_client` și
+    `mkt_facing._extract_chain` (aceeași listă Dedeman/Altex/Leroy/Hornbach).
+    """
+    if not raw:
+        return "Alte"
+    upper = raw.upper()
+    if "DEDEMAN" in upper:
+        return "Dedeman"
+    if "ALTEX" in upper:
+        return "Altex"
+    if "LEROY" in upper or "MERLIN" in upper:
+        return "Leroy Merlin"
+    if "HORNBACH" in upper:
+        return "Hornbach"
+    return "Alte"
 
 
 @dataclass
@@ -71,12 +102,11 @@ class MonthCell:
 
 
 @dataclass
-class ClientRow:
-    client: str
+class CategoryCell:
+    code: str
+    label: str
     sales_y1: Decimal = Decimal(0)
     sales_y2: Decimal = Decimal(0)
-    qty_y1: Decimal = Decimal(0)
-    qty_y2: Decimal = Decimal(0)
 
     @property
     def diff(self) -> Decimal:
@@ -90,13 +120,34 @@ class ClientRow:
 
 
 @dataclass
+class ChainRow:
+    chain: str
+    sales_y1: Decimal = Decimal(0)
+    sales_y2: Decimal = Decimal(0)
+    categories: dict[str, CategoryCell] = field(default_factory=dict)
+
+    @property
+    def diff(self) -> Decimal:
+        return self.sales_y2 - self.sales_y1
+
+    @property
+    def pct(self) -> Decimal | None:
+        if self.sales_y1 == 0:
+            return None
+        return (self.diff / self.sales_y1) * Decimal(100)
+
+    def cat(self, code: str, label: str) -> CategoryCell:
+        return self.categories.setdefault(code, CategoryCell(code=code, label=label))
+
+
+@dataclass
 class MarcaPrivataData:
     scope: str
     year_curr: int
     year_prev: int
     last_update: datetime | None = None
     months: dict[int, MonthCell] = field(default_factory=dict)
-    clients: list[ClientRow] = field(default_factory=list)
+    chains: list[ChainRow] = field(default_factory=list)
 
     def cell(self, m: int) -> MonthCell:
         return self.months.setdefault(m, MonthCell(month=m))
@@ -230,6 +281,96 @@ async def _raw_rows(
     return list(out.values())
 
 
+async def _chain_category_rows(
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    year_curr: int,
+    batch_source_groups: list[list[str]],
+    months_filter: set[int] | None,
+) -> list[dict[str, Any]]:
+    """Rânduri agregate private label KA pe (client, category_code, year).
+
+    Filtrăm pe `ProductCategory.code IN ('MU','EPS','UMEDE')` — alte categorii
+    (VARSACI etc.) nu intră în breakdown-ul pe rețea cerut de UI.
+    Aceeași logică de dedup (primul source din grup câștigă perechea year,month).
+    """
+    year_prev = year_curr - 1
+    out: dict[tuple[str | None, str, int], dict[str, Any]] = {}
+
+    for group in batch_source_groups:
+        claimed_pairs: set[tuple[int, int]] = set()
+        for src in group:
+            pairs_stmt = (
+                select(RawSale.year, RawSale.month)
+                .join(Product, Product.id == RawSale.product_id)
+                .join(Brand, Brand.id == Product.brand_id)
+                .join(ProductCategory, ProductCategory.id == Product.category_id)
+                .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+                .where(
+                    RawSale.tenant_id == tenant_id,
+                    RawSale.year.in_([year_prev, year_curr]),
+                    func.upper(RawSale.channel) == "KA",
+                    Brand.is_private_label.is_(True),
+                    ProductCategory.code.in_(CHAIN_CATEGORY_CODES),
+                    ImportBatch.source == src,
+                )
+                .distinct()
+            )
+            source_pairs = {
+                (int(r.year), int(r.month))
+                for r in (await session.execute(pairs_stmt)).all()
+            }
+            if months_filter is not None:
+                source_pairs = {(y, m) for (y, m) in source_pairs if m in months_filter}
+            new_pairs = source_pairs - claimed_pairs
+            if not new_pairs:
+                continue
+
+            new_years = {y for (y, _m) in new_pairs}
+            new_months = {m for (_y, m) in new_pairs}
+            stmt = (
+                select(
+                    RawSale.client,
+                    ProductCategory.code.label("cat_code"),
+                    RawSale.year,
+                    RawSale.month,
+                    func.coalesce(func.sum(RawSale.amount), 0).label("amt"),
+                )
+                .join(Product, Product.id == RawSale.product_id)
+                .join(Brand, Brand.id == Product.brand_id)
+                .join(ProductCategory, ProductCategory.id == Product.category_id)
+                .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+                .where(
+                    RawSale.tenant_id == tenant_id,
+                    RawSale.year.in_(new_years),
+                    RawSale.month.in_(new_months),
+                    func.upper(RawSale.channel) == "KA",
+                    Brand.is_private_label.is_(True),
+                    ProductCategory.code.in_(CHAIN_CATEGORY_CODES),
+                    ImportBatch.source == src,
+                )
+                .group_by(RawSale.client, ProductCategory.code, RawSale.year, RawSale.month)
+            )
+            result = await session.execute(stmt)
+            for r in result.all():
+                ym = (int(r.year), int(r.month))
+                if ym not in new_pairs:
+                    continue
+                key = (r.client, str(r.cat_code), int(r.year))
+                row = out.setdefault(key, {
+                    "client": r.client,
+                    "cat_code": str(r.cat_code),
+                    "year": int(r.year),
+                    "amount": Decimal(0),
+                })
+                row["amount"] += Decimal(r.amt or 0)
+
+            claimed_pairs |= new_pairs
+
+    return list(out.values())
+
+
 async def _last_update(
     session: AsyncSession,
     tenant_id: UUID,
@@ -269,8 +410,8 @@ async def _build(
         months_filter=months_filter,
     )
 
-    # Rezolvare SAM pentru client canonic (folosim store_id canonic ca nume
-    # final de client când e posibil — altfel cade pe string-ul raw).
+    # Rezolvare SAM pentru client canonic — în prezent doar consumăm
+    # rezultatul (fără excluderi), dar păstrăm hook-ul pentru filtrări viitoare.
     client_map = await client_sam_map(session, tenant_id)
     store_ids_to_resolve: set[UUID] = {
         r["store_id"]
@@ -285,16 +426,9 @@ async def _build(
         year_prev=year_curr - 1,
     )
 
-    # Pentru agregarea pe client, folosim raw-client string-ul (același ca
-    # în legacy — nu încercăm sa-l canonicăm în SAM aici, userii vor să
-    # vadă magazinul exact).
     year_prev = year_curr - 1
-    by_client: dict[str, ClientRow] = {}
 
     for r in rows:
-        # Resolve SAM (doar ca să excludem eventualele rânduri "orfane"
-        # în viitor — aici aplicăm doar la nivel de filtrare Puskin/similar
-        # — momentan nu excludem nimic explicit în SaaS).
         _resolved_agent, _resolved_store = resolve_canonical(
             agent_id=r["agent_id"], store_id=r["store_id"], client=r.get("client"),
             client_map=client_map, store_map=store_map,
@@ -307,26 +441,39 @@ async def _build(
         elif r["year"] == year_curr:
             cell.sales_y2 += r["amount"]
 
-        client_key = (r.get("client") or "— necunoscut —").strip()
-        if not client_key:
-            client_key = "— necunoscut —"
-        cr = by_client.setdefault(client_key, ClientRow(client=client_key))
-        if r["year"] == year_prev:
-            cr.sales_y1 += r["amount"]
-            cr.qty_y1 += r["quantity"]
-        elif r["year"] == year_curr:
-            cr.sales_y2 += r["amount"]
-            cr.qty_y2 += r["quantity"]
-
     # Asigurăm 12 celule în output (chiar și 0).
     for m in range(1, 13):
         data.cell(m)
 
-    # Sort clients: desc y1, y2 fallback
-    data.clients = sorted(
-        by_client.values(),
-        key=lambda c: (-(c.sales_y1 or Decimal(0)), -(c.sales_y2 or Decimal(0))),
+    # Agregare pe rețea (Dedeman/Altex/Leroy/Hornbach/Alte) × categorie
+    # (MU/EPS/UMEDE). Se bazează pe produs.category_id → ProductCategory.code.
+    cat_rows = await _chain_category_rows(
+        session, tenant_id,
+        year_curr=year_curr, batch_source_groups=batch_source_groups,
+        months_filter=months_filter,
     )
+    cat_labels = {code: label for code, label in CHAIN_CATEGORIES}
+    by_chain: dict[str, ChainRow] = {}
+    for r in cat_rows:
+        chain = _extract_chain(r.get("client"))
+        cr = by_chain.setdefault(chain, ChainRow(chain=chain))
+        cc = cr.cat(r["cat_code"], cat_labels.get(r["cat_code"], r["cat_code"]))
+        if r["year"] == year_prev:
+            cr.sales_y1 += r["amount"]
+            cc.sales_y1 += r["amount"]
+        elif r["year"] == year_curr:
+            cr.sales_y2 += r["amount"]
+            cc.sales_y2 += r["amount"]
+
+    # Ordonăm după CHAIN_ORDER (rețelele cunoscute primele), cu fallback pe
+    # desc. sales_y1 pentru "Alte"/chains necunoscute.
+    def _chain_sort_key(c: ChainRow) -> tuple[int, Decimal]:
+        try:
+            return (CHAIN_ORDER.index(c.chain), -c.sales_y1)
+        except ValueError:
+            return (len(CHAIN_ORDER), -c.sales_y1)
+
+    data.chains = sorted(by_chain.values(), key=_chain_sort_key)
 
     data.last_update = await _last_update(
         session, tenant_id,

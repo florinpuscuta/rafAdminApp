@@ -13,6 +13,7 @@ class TgtMonthCell(APISchema):
     prev_sales: Decimal                 # an referință
     curr_sales: Decimal                 # realizat an curent
     target: Decimal                     # prev × (1 + pct/100)
+    target_pct: Decimal                 # procentul folosit pentru luna asta
     gap: Decimal                        # curr - target (+ = overachievement)
     achievement_pct: Decimal | None = None  # curr / target * 100
 
@@ -39,6 +40,7 @@ class TgtMonthTotal(APISchema):
     prev_sales: Decimal
     curr_sales: Decimal
     target: Decimal
+    target_pct: Decimal
     gap: Decimal
     achievement_pct: Decimal | None = None
 
@@ -47,8 +49,24 @@ class TgtResponse(APISchema):
     scope: str                          # "adp" | "sika" | "sikadp"
     year_curr: int
     year_prev: int
-    target_pct: Decimal                 # procentul global folosit
     last_update: datetime | None = None
     agents: list[TgtAgentRow] = Field(default_factory=list)
     month_totals: list[TgtMonthTotal] = Field(default_factory=list)
     grand_totals: TgtTotals
+    growth_pct: list["TgtGrowthItem"] = Field(default_factory=list)
+
+
+class TgtGrowthItem(APISchema):
+    year: int
+    month: int
+    pct: Decimal
+
+
+class TgtGrowthList(APISchema):
+    year: int
+    items: list[TgtGrowthItem] = Field(default_factory=list)
+
+
+class TgtGrowthUpsert(APISchema):
+    year: int
+    items: list[TgtGrowthItem] = Field(default_factory=list)

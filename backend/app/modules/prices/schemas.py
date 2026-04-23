@@ -17,6 +17,7 @@ class PriceComparisonRow(APISchema):
     tt_sales: Decimal
     delta_abs: Decimal | None
     delta_pct: Decimal | None
+    is_private_label: bool = False
 
 
 class PriceComparisonSummary(APISchema):
@@ -71,6 +72,7 @@ class Pret3NetProduct(APISchema):
     clients: dict[str, Pret3NetClient]
     total_sales: Decimal
     total_qty: Decimal
+    is_private_label: bool = False
 
 
 class Pret3NetResponse(APISchema):
@@ -114,6 +116,7 @@ class KaRetailRow(APISchema):
     retail_price: Decimal | None
     diff_pct: Decimal | None
     total_sales: Decimal
+    is_private_label: bool = False
 
 
 class KaRetailResponse(APISchema):

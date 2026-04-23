@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ApiError } from "../../shared/api";
+import { CollapsibleBlock } from "../../shared/ui/CollapsibleBlock";
+import { useCompanyScope } from "../../shared/ui/CompanyScopeProvider";
 import { norm, SearchInput } from "../../shared/ui/SearchInput";
 import { TableSkeleton } from "../../shared/ui/Skeleton";
 import { useToast } from "../../shared/ui/ToastProvider";
+import { groupByEpsSubgroup, isEpsCategory } from "../../shared/utils/epsSubgroup";
 import { downloadTableAsCsv } from "../../shared/utils/exportCsv";
+import { sikaTm } from "../../shared/utils/sikaTm";
 import { getKaRetail } from "./api";
 import type { KaRetailFilters, KaRetailResponse, KaRetailRow } from "./types";
 
@@ -46,6 +50,8 @@ function diffColor(v: string | null): string {
 }
 
 export default function PreturiKaRetailPage() {
+  const { scope } = useCompanyScope();
+  const isSika = scope === "sika";
   const toast = useToast();
   const [data, setData] = useState<KaRetailResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -75,6 +81,21 @@ export default function PreturiKaRetailPage() {
       norm(`${r.description} ${r.productCode ?? ""} ${r.category ?? ""}`).includes(q),
     );
   }, [data, search]);
+
+  const byCategory = useMemo(() => {
+    const out: Record<string, KaRetailRow[]> = {};
+    for (const row of filteredRows) {
+      const key = isSika ? sikaTm(row.description) : (row.category ?? "—");
+      if (!out[key]) out[key] = [];
+      out[key].push(row);
+    }
+    const order = Object.keys(out).sort((a, b) => {
+      const sa = out[a].reduce((s, p) => s + Number(p.kaQty || 0) * Number(p.kaPrice || 0), 0);
+      const sb = out[b].reduce((s, p) => s + Number(p.kaQty || 0) * Number(p.kaPrice || 0), 0);
+      return sb - sa;
+    });
+    return order.map((cat) => [cat, out[cat]] as const);
+  }, [filteredRows, isSika]);
 
   function update(patch: Partial<KaRetailFilters>) {
     const next = { ...filters, ...patch };
@@ -182,36 +203,102 @@ export default function PreturiKaRetailPage() {
 
       {loading && !data ? (
         <TableSkeleton rows={10} cols={9} />
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table ref={tableRef} style={styles.table}>
-            <thead>
-              <tr>
-                <th style={th}>#</th>
-                <th style={th}>Produs</th>
-                <th style={{ ...th, textAlign: "right", color: "#2563eb" }}>Cant. KA</th>
-                <th style={{ ...th, textAlign: "right", color: "#2563eb" }}>Preț mediu KA</th>
-                <th style={{ ...th, textAlign: "right", color: "#f97316" }}>Cant. Retail</th>
-                <th style={{ ...th, textAlign: "right", color: "#f97316" }}>Preț mediu Retail</th>
-                <th style={{ ...th, textAlign: "right" }}>Diferență %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!data || data.rows.length === 0 ? (
-                <tr><td colSpan={7} style={td}>
-                  Niciun produs vândut în ambele canale (KA + Retail) în perioada selectată.
-                </td></tr>
-              ) : filteredRows.length === 0 ? (
-                <tr><td colSpan={7} style={td}>Niciun rezultat pentru „{search}".</td></tr>
-              ) : (
-                filteredRows.map((r, i) => <Row key={`${r.description}-${i}`} r={r} idx={i + 1} />)
-              )}
-            </tbody>
-          </table>
+      ) : !data || data.rows.length === 0 ? (
+        <div style={styles.emptyCard}>
+          Niciun produs vândut în ambele canale (KA + Retail) în perioada selectată.
         </div>
+      ) : filteredRows.length === 0 ? (
+        <div style={styles.emptyCard}>Niciun rezultat pentru „{search}".</div>
+      ) : scope === "adeplast" ? (
+        <>
+          {renderBrandSection(byCategory, false, "Adeplast")}
+          {renderBrandSection(byCategory, true, "Marcă privată")}
+        </>
+      ) : (
+        renderCategoryBlocks(byCategory)
       )}
     </div>
   );
+
+  function renderBrandSection(
+    cats: ReadonlyArray<readonly [string, KaRetailRow[]]>,
+    plFilter: boolean,
+    brandLabel: string,
+  ) {
+    const filtered = cats
+      .map(([cat, rows]) => [cat, rows.filter((r) => !!r.isPrivateLabel === plFilter)] as const)
+      .filter(([, rows]) => rows.length > 0);
+    if (filtered.length === 0) return null;
+    const total = filtered.reduce((s, [, r]) => s + r.length, 0);
+    return (
+      <div style={{ marginBottom: 14 }}>
+        <CollapsibleBlock title={brandLabel} subtitle={`${total} produse`}>
+          {renderCategoryBlocks(filtered)}
+        </CollapsibleBlock>
+      </div>
+    );
+  }
+
+  function renderCategoryBlocks(cats: ReadonlyArray<readonly [string, KaRetailRow[]]>) {
+    return cats.map(([cat, rows], catIdx) => {
+      const isEps = !isSika && isEpsCategory(cat);
+      const epsGroups = isEps
+        ? groupByEpsSubgroup(
+            rows,
+            (p) => p.description,
+            (p) => Number(p.kaQty || 0) * Number(p.kaPrice || 0),
+          )
+        : null;
+
+      const headerRow = (
+        <tr>
+          <th style={th}>#</th>
+          <th style={th}>Produs</th>
+          <th style={{ ...th, textAlign: "right", color: "#2563eb" }}>Cant. KA</th>
+          <th style={{ ...th, textAlign: "right", color: "#2563eb" }}>Preț mediu KA</th>
+          <th style={{ ...th, textAlign: "right", color: "#f97316" }}>Cant. Retail</th>
+          <th style={{ ...th, textAlign: "right", color: "#f97316" }}>Preț mediu Retail</th>
+          <th style={{ ...th, textAlign: "right" }}>Diferență %</th>
+        </tr>
+      );
+
+      return (
+        <div key={cat} style={styles.catBlock}>
+          <CollapsibleBlock title={cat} subtitle={`${rows.length} produse`}>
+            {isEps && epsGroups ? (
+              epsGroups.map((g, gi) => (
+                <div key={g.key} style={styles.subBlock}>
+                  <CollapsibleBlock
+                    title={g.label}
+                    subtitle={`${g.products.length} produse`}
+                    level={1}
+                  >
+                    <div style={{ overflowX: "auto" }}>
+                      <table ref={catIdx === 0 && gi === 0 ? tableRef : undefined} style={styles.table}>
+                        <thead>{headerRow}</thead>
+                        <tbody>
+                          {g.products.map((r, i) => <Row key={`${r.description}-${i}`} r={r} idx={i + 1} />)}
+                        </tbody>
+                      </table>
+                    </div>
+                  </CollapsibleBlock>
+                </div>
+              ))
+            ) : (
+              <div style={{ overflowX: "auto" }}>
+                <table ref={catIdx === 0 ? tableRef : undefined} style={styles.table}>
+                  <thead>{headerRow}</thead>
+                  <tbody>
+                    {rows.map((r, i) => <Row key={`${r.description}-${i}`} r={r} idx={i + 1} />)}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </CollapsibleBlock>
+        </div>
+      );
+    });
+  }
 }
 
 function Row({ r, idx }: { r: KaRetailRow; idx: number }) {
@@ -250,6 +337,28 @@ const styles: Record<string, React.CSSProperties> = {
   label: { display: "flex", flexDirection: "column", gap: 3, fontSize: 12, color: "var(--fg-muted, #666)" },
   select: { padding: 6, fontSize: 13, border: "1px solid var(--border, #ccc)", borderRadius: 4 },
   input: { padding: "5px 8px", fontSize: 13, border: "1px solid var(--border, #ccc)", borderRadius: 4 },
+  catBlock: {
+    background: "var(--bg-elevated, #fff)",
+    border: "1px solid var(--border, #eee)",
+    borderRadius: 6,
+    padding: 12,
+    marginBottom: 12,
+  },
+  subBlock: {
+    background: "var(--bg, #fafafa)",
+    border: "1px solid var(--border, #eee)",
+    borderRadius: 4,
+    padding: 8,
+    marginBottom: 8,
+  },
+  emptyCard: {
+    background: "var(--bg-elevated, #fafafa)",
+    border: "1px solid var(--border, #eee)",
+    borderRadius: 6,
+    padding: 20,
+    color: "var(--fg-muted, #888)",
+    textAlign: "center",
+  },
   table: { borderCollapse: "collapse", width: "100%" },
 };
 const th: React.CSSProperties = {

@@ -40,6 +40,7 @@ from app.modules.mappings.resolution import (
     store_agent_map,
 )
 from app.modules.sales.models import ImportBatch, RawSale
+from app.modules.targhet.models import TarghetGrowthPct
 
 
 _MONTH_NAMES = [
@@ -87,19 +88,41 @@ class MonthCell:
 
 
 @dataclass
+class AgentTotals:
+    prev_sales: Decimal
+    curr_sales: Decimal
+    target: Decimal
+
+    @property
+    def gap(self) -> Decimal:
+        return self.curr_sales - self.target
+
+    @property
+    def achievement_pct(self) -> Decimal | None:
+        if self.target == 0:
+            return None
+        return (self.curr_sales / self.target) * Decimal(100)
+
+
+@dataclass
 class AgentTarget:
     agent_id: UUID | None
     agent_name: str
-    target_pct: Decimal = DEFAULT_TARGET_PCT
     months: dict[int, MonthCell] = field(default_factory=dict)
 
     def cell(self, m: int) -> MonthCell:
-        return self.months.setdefault(m, MonthCell(month=m, target_pct=self.target_pct))
+        return self.months.setdefault(m, MonthCell(month=m))
 
-    def totals(self) -> MonthCell:
-        prev = sum((c.prev_sales for c in self.months.values()), Decimal(0))
-        curr = sum((c.curr_sales for c in self.months.values()), Decimal(0))
-        return MonthCell(month=0, prev_sales=prev, curr_sales=curr, target_pct=self.target_pct)
+    def totals(self) -> AgentTotals:
+        """Agregat pe an: target = suma target-urilor lunare (fiecare cu pct-ul ei)."""
+        prev = Decimal(0)
+        curr = Decimal(0)
+        agg_target = Decimal(0)
+        for c in self.months.values():
+            prev += c.prev_sales
+            curr += c.curr_sales
+            agg_target += c.target
+        return AgentTotals(prev_sales=prev, curr_sales=curr, target=agg_target)
 
 
 # ── Sales aggregation (reutilizează logica dedup din analiza_pe_luni) ─────
@@ -218,13 +241,54 @@ async def _last_update(
 
 # ── Core builder ─────────────────────────────────────────────────────────
 
+async def load_growth_pct_map(
+    session: AsyncSession, tenant_id: UUID, *, year: int,
+) -> dict[int, Decimal]:
+    """Returnează {month: pct} pentru toate 12 lunile, completând cu default."""
+    stmt = select(TarghetGrowthPct.month, TarghetGrowthPct.pct).where(
+        TarghetGrowthPct.tenant_id == tenant_id,
+        TarghetGrowthPct.year == year,
+    )
+    out: dict[int, Decimal] = {m: DEFAULT_TARGET_PCT for m in range(1, 13)}
+    for m, pct in (await session.execute(stmt)).all():
+        out[int(m)] = Decimal(pct)
+    return out
+
+
+async def upsert_growth_pct(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    year: int,
+    items: list[tuple[int, Decimal]],
+) -> dict[int, Decimal]:
+    """Salvează bulk pct pentru (tenant, year, month). Returnează map-ul complet."""
+    for month, pct in items:
+        if not (1 <= month <= 12):
+            continue
+        stmt = select(TarghetGrowthPct).where(
+            TarghetGrowthPct.tenant_id == tenant_id,
+            TarghetGrowthPct.year == year,
+            TarghetGrowthPct.month == month,
+        )
+        existing = (await session.execute(stmt)).scalar_one_or_none()
+        if existing is None:
+            session.add(TarghetGrowthPct(
+                tenant_id=tenant_id, year=year, month=month, pct=pct,
+            ))
+        else:
+            existing.pct = pct
+    await session.flush()
+    return await load_growth_pct_map(session, tenant_id, year=year)
+
+
 async def _build_agents(
     session: AsyncSession,
     tenant_id: UUID,
     *,
     year_curr: int,
     batch_source_groups: list[list[str]],
-    target_pct: Decimal,
+    pct_by_month: dict[int, Decimal],
 ) -> list[AgentTarget]:
     year_prev = year_curr - 1
 
@@ -249,9 +313,10 @@ async def _build_agents(
         )
         ar = by_agent.setdefault(
             resolved_agent,
-            AgentTarget(agent_id=resolved_agent, agent_name="", target_pct=target_pct),
+            AgentTarget(agent_id=resolved_agent, agent_name=""),
         )
         cell = ar.cell(r["month"])
+        cell.target_pct = pct_by_month.get(r["month"], DEFAULT_TARGET_PCT)
         if r["year"] == year_prev:
             cell.prev_sales += r["amount"]
         elif r["year"] == year_curr:
@@ -263,9 +328,10 @@ async def _build_agents(
         ar.agent_name = (
             agent_names.get(aid, "— nemapat —") if aid else "— nemapat —"
         )
-        # Asigură existența celor 12 celule
+        # Asigură existența celor 12 celule, fiecare cu pct-ul corect.
         for m in range(1, 13):
-            ar.cell(m)
+            cell = ar.cell(m)
+            cell.target_pct = pct_by_month.get(m, DEFAULT_TARGET_PCT)
 
     def _sort_key(a: AgentTarget) -> tuple[int, Decimal]:
         is_unassigned = 1 if a.agent_id is None else 0
@@ -276,67 +342,52 @@ async def _build_agents(
 
 # ── Public entry-points ──────────────────────────────────────────────────
 
-async def get_for_adp(
-    session: AsyncSession, tenant_id: UUID, *, year_curr: int,
-    target_pct: Decimal = DEFAULT_TARGET_PCT,
+async def _get_for(
+    session: AsyncSession, tenant_id: UUID, *,
+    scope: str, year_curr: int,
+    batch_source_groups: list[list[str]],
 ) -> dict[str, Any]:
+    pct_by_month = await load_growth_pct_map(session, tenant_id, year=year_curr)
     agents = await _build_agents(
         session, tenant_id,
-        year_curr=year_curr, batch_source_groups=_GROUPS_ADP,
-        target_pct=target_pct,
+        year_curr=year_curr, batch_source_groups=batch_source_groups,
+        pct_by_month=pct_by_month,
     )
     last_update = await _last_update(
-        session, tenant_id, sources=[s for g in _GROUPS_ADP for s in g],
+        session, tenant_id, sources=[s for g in batch_source_groups for s in g],
     )
     return {
-        "scope": "adp",
+        "scope": scope,
         "year_curr": year_curr,
         "year_prev": year_curr - 1,
-        "target_pct": target_pct,
+        "pct_by_month": pct_by_month,
         "last_update": last_update,
         "agents": agents,
     }
+
+
+async def get_for_adp(
+    session: AsyncSession, tenant_id: UUID, *, year_curr: int,
+) -> dict[str, Any]:
+    return await _get_for(
+        session, tenant_id,
+        scope="adp", year_curr=year_curr, batch_source_groups=_GROUPS_ADP,
+    )
 
 
 async def get_for_sika(
     session: AsyncSession, tenant_id: UUID, *, year_curr: int,
-    target_pct: Decimal = DEFAULT_TARGET_PCT,
 ) -> dict[str, Any]:
-    agents = await _build_agents(
+    return await _get_for(
         session, tenant_id,
-        year_curr=year_curr, batch_source_groups=_GROUPS_SIKA,
-        target_pct=target_pct,
+        scope="sika", year_curr=year_curr, batch_source_groups=_GROUPS_SIKA,
     )
-    last_update = await _last_update(
-        session, tenant_id, sources=[s for g in _GROUPS_SIKA for s in g],
-    )
-    return {
-        "scope": "sika",
-        "year_curr": year_curr,
-        "year_prev": year_curr - 1,
-        "target_pct": target_pct,
-        "last_update": last_update,
-        "agents": agents,
-    }
 
 
 async def get_for_sikadp(
     session: AsyncSession, tenant_id: UUID, *, year_curr: int,
-    target_pct: Decimal = DEFAULT_TARGET_PCT,
 ) -> dict[str, Any]:
-    agents = await _build_agents(
+    return await _get_for(
         session, tenant_id,
-        year_curr=year_curr, batch_source_groups=_GROUPS_SIKADP,
-        target_pct=target_pct,
+        scope="sikadp", year_curr=year_curr, batch_source_groups=_GROUPS_SIKADP,
     )
-    last_update = await _last_update(
-        session, tenant_id, sources=[s for g in _GROUPS_SIKADP for s in g],
-    )
-    return {
-        "scope": "sikadp",
-        "year_curr": year_curr,
-        "year_prev": year_curr - 1,
-        "target_pct": target_pct,
-        "last_update": last_update,
-        "agents": agents,
-    }

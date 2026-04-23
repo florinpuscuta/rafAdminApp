@@ -21,6 +21,7 @@ from app.modules.consolidat.router import router as consolidat_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.demo.router import router as demo_router
 from app.modules.eps.router import router as eps_router
+from app.modules.evaluare_agenti.router import router as evaluare_agenti_router
 from app.modules.gallery.router import router as gallery_router
 from app.modules.grupe_produse.router import router as grupe_produse_router
 from app.modules.mappings.router import router as mappings_router
@@ -98,4 +99,5 @@ MODULE_ROUTERS: list[APIRouter] = [
     monthly_report_router,
     taskuri_router,
     app_settings_router,
+    evaluare_agenti_router,
 ]
