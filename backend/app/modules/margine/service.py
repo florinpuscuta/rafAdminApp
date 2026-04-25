@@ -8,7 +8,7 @@ Pe scope (adp / sika / sikadp), pentru intervalul (from_year, from_month) →
   - calculam marja per produs: (avg_sale - cost) / avg_sale
   - grupam:
       ADP    → ProductCategory.label
-      SIKA   → Target Market (via grupe_produse._classify_sika_tm)
+      SIKA   → Target Market (via grupe_produse.classify_sika_tm)
       SIKADP → label combinat: "<TM>" pentru produsele Sika, "<Categorie>"
                pentru produsele Adeplast (un singur tabel, cu source tag)
 
@@ -24,10 +24,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.analiza_magazin_dashboard.service import (
-    _shift,
-    SCOPE_SOURCES as _AMD_SCOPE_SOURCES,
-)
+from app.core.period_math import period_pairs as _core_period_pairs
 from app.modules.pret_productie.models import ProductionPrice
 from app.modules.product_categories.models import ProductCategory
 from app.modules.products.models import Product
@@ -128,20 +125,17 @@ class MargineData:
     missing_cost: list[MissingCostRow]
 
 
-def _period_pairs(
+# `period_pairs` (public) folosit cross-modul (ex: marja_lunara). Delegam la
+# `app.core.period_math.period_pairs` ca sa avem o sursa unica de adevar.
+def period_pairs(
     from_year: int, from_month: int, to_year: int, to_month: int,
 ) -> list[tuple[int, int]]:
-    """Lista (year, month) inclusiv intre cele doua puncte."""
-    out: list[tuple[int, int]] = []
-    y, m = from_year, from_month
-    end = (to_year, to_month)
-    # garda: daca from > to → returneaza []
-    if (y, m) > end:
-        return out
-    while (y, m) <= end:
-        out.append((y, m))
-        y, m = _shift(y, m, 1)
-    return out
+    return _core_period_pairs(from_year, from_month, to_year, to_month)
+
+
+# Alias compat — uz intern in margine.service. Consumatorii externi
+# foloseasc `period_pairs` (public).
+_period_pairs = period_pairs
 
 
 async def _aggregate_sales(
@@ -562,7 +556,7 @@ def _group_for(
     cu 'mp::'). Pentru calculul de eligibilitate la discount, orice grupa
     'private_label' se mapeaza la regula singleton 'marca_privata'.
     """
-    from app.modules.grupe_produse.service import _classify_sika_tm
+    from app.modules.grupe_produse.service import classify_sika_tm
 
     if scope == "adp" or (scope == "sikadp" and not is_sika):
         cat = category_label or "Fara categorie"
@@ -571,7 +565,7 @@ def _group_for(
             return (f"MP — {cat}", "private_label", f"mp::{code}")
         return (cat, "category", code)
     # sika scope sau partea sika din sikadp
-    tm = _classify_sika_tm(product_name)
+    tm = classify_sika_tm(product_name)
     return (tm, "tm", tm)
 
 
@@ -780,3 +774,18 @@ async def build_margine(
         groups=sorted_groups,
         missing_cost=missing,
     )
+
+
+# ── Public API ─────────────────────────────────────────────────────────────
+#
+# Cross-module consumers (marja_lunara, etc.) folosesc denumirile fara
+# underscore. Pastram alias-urile private pentru continuitate interna in
+# acest fisier — semnatura functiilor nu se schimba.
+aggregate_sales = _aggregate_sales
+total_period_revenue = _total_period_revenue
+unmapped_per_client = _unmapped_per_client
+revenue_per_client_product = _revenue_per_client_product
+fetch_products = _fetch_products
+fetch_costs = _fetch_costs
+resolve_cost = _resolve_cost
+group_for = _group_for

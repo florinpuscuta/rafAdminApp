@@ -14,7 +14,7 @@ Reguli fixate:
   - scope=adp  → batch source `sales_xlsx`; filtru categorie după
     `ProductCategory.code` (MU/EPS/UMEDE/DIBLURI/VARSACI etc.)
   - scope=sika → batch source `sika_mtd_xlsx` (prioritar) + `sika_xlsx`;
-    filtru TM prin `_classify_sika_tm(product.name)`
+    filtru TM prin `classify_sika_tm(product.name)`
 """
 from __future__ import annotations
 
@@ -303,7 +303,7 @@ async def _hydrate_products(
 
     category_label:
       - adp  → ProductCategory.code (MU/EPS/UMEDE/...) sau None
-      - sika → label TM via _classify_sika_tm(name) sau None
+      - sika → label TM via classify_sika_tm(name) sau None
     """
     if not product_ids:
         return {}
@@ -324,7 +324,7 @@ async def _hydrate_products(
             for r in rows
         }
     # sika — label TM derivat din nume
-    from app.modules.grupe_produse.service import _classify_sika_tm
+    from app.modules.grupe_produse.service import classify_sika_tm
 
     rows = (await session.execute(
         select(Product.id, Product.code, Product.name, Brand.name.label("brand"))
@@ -340,7 +340,7 @@ async def _hydrate_products(
             # Produs non-Sika apărut cumva pe un batch Sika — lăsăm fără TM.
             out[r.id] = (r.code or "", r.name or "", None)
             continue
-        tm = _classify_sika_tm(r.name)
+        tm = classify_sika_tm(r.name)
         out[r.id] = (r.code or "", r.name or "", tm if tm != "Altele" else None)
     return out
 

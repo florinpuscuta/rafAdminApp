@@ -402,12 +402,21 @@ _SIKA_TM_RULES: list[tuple[str, _re.Pattern[str]]] = [
 ]
 
 
-def _classify_sika_tm(name: str | None) -> str:
+def classify_sika_tm(name: str | None) -> str:
+    """Public: clasifica un produs Sika in TM (Target Market) pe baza numelui.
+
+    Folosit cross-modul de margine, marja_lunara, discount_rules. Lasam si
+    alias `_classify_sika_tm` pentru utilizatori interni din grupe_produse.
+    """
     n = name or ""
     for label, pat in _SIKA_TM_RULES:
         if pat.search(n):
             return label
     return "Altele"
+
+
+# Alias compat pentru uz intern (in grupe_produse.service).
+_classify_sika_tm = classify_sika_tm
 
 
 _EPS_CLASS_RE = _re.compile(r"[Ee][Pp][Ss][ _\-]*(\d{2,3})")

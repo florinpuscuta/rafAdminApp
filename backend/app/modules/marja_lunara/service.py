@@ -116,21 +116,21 @@ async def _build_month(
 ) -> MLMonth:
     pairs = [(year, month)]
 
-    revenue_period = await margine_svc._total_period_revenue(
+    revenue_period = await margine_svc.total_period_revenue(
         session, tenant_id=tenant_id, scope=scope, pairs=pairs,
     )
-    sales_rows = await margine_svc._aggregate_sales(
+    sales_rows = await margine_svc.aggregate_sales(
         session, tenant_id=tenant_id, scope=scope, pairs=pairs,
     )
     pids = [r["product_id"] for r in sales_rows]
-    products = await margine_svc._fetch_products(
+    products = await margine_svc.fetch_products(
         session, tenant_id=tenant_id, product_ids=pids,
     )
     monthly_costs = await _fetch_monthly_costs(
         session, tenant_id=tenant_id, scope=scope, year=year, month=month,
         product_ids=pids,
     )
-    media_costs = await margine_svc._fetch_costs(
+    media_costs = await margine_svc.fetch_costs(
         session, tenant_id=tenant_id, scope=scope, product_ids=pids,
     )
 
@@ -159,7 +159,7 @@ async def _build_month(
         cost: Decimal | None = monthly_costs.get(pid)
         used_fallback = False
         if cost is None:
-            cost = margine_svc._resolve_cost(
+            cost = margine_svc.resolve_cost(
                 scope=scope, is_adp=sr["is_adp"], is_sika=sr["is_sika"],
                 costs=media_costs, pid=pid,
             )
@@ -175,7 +175,7 @@ async def _build_month(
         cost_line = cost * qty
         profit_line = revenue - cost_line
 
-        label, kind, key = margine_svc._group_for(
+        label, kind, key = margine_svc.group_for(
             scope=scope, is_adp=sr["is_adp"], is_sika=sr["is_sika"],
             category_code=prod["category_code"],
             category_label=prod["category_label"],
@@ -204,12 +204,12 @@ async def _build_month(
     margin_pct_total = _safe_div(profit_total, revenue_covered) * Decimal(100)
 
     # ── Alocare discount pentru aceasta luna ──
-    unmapped_per_client = await margine_svc._unmapped_per_client(
+    unmapped_per_client = await margine_svc.unmapped_per_client(
         session, tenant_id=tenant_id, scope=scope, pairs=pairs,
     )
     discount_total = sum(unmapped_per_client.values(), Decimal(0))
 
-    rev_per_cp = await margine_svc._revenue_per_client_product(
+    rev_per_cp = await margine_svc.revenue_per_client_product(
         session, tenant_id=tenant_id, scope=scope, pairs=pairs,
         product_ids=list(pid_to_group.keys()),
     )
@@ -287,7 +287,7 @@ async def build_marja_lunara(
     to_year: int,
     to_month: int,
 ) -> MarjaLunaraData:
-    pairs = margine_svc._period_pairs(from_year, from_month, to_year, to_month)
+    pairs = margine_svc.period_pairs(from_year, from_month, to_year, to_month)
     rules = await load_rules_dict(session, tenant_id, scope)
     months_out: list[MLMonth] = []
     for (y, m) in pairs:

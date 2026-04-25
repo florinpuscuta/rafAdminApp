@@ -116,7 +116,7 @@ async def list_groups(
         return out
 
     # scope == "sika" — TM-uri cu produse care au vanzari KA in sika sources
-    from app.modules.grupe_produse.service import _classify_sika_tm
+    from app.modules.grupe_produse.service import classify_sika_tm
     name_stmt = (
         select(Product.name)
         .join(RawSale, RawSale.product_id == Product.id)
@@ -130,7 +130,7 @@ async def list_groups(
     )
     seen: set[str] = set()
     for name in (await session.execute(name_stmt)).scalars():
-        seen.add(_classify_sika_tm(name or ""))
+        seen.add(classify_sika_tm(name or ""))
     return [
         {"kind": "tm", "key": tm, "label": tm}
         for tm in sorted(seen)

@@ -21,6 +21,7 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.period_math import shift_months, window_pairs
 from app.modules.brands.models import Brand
 from app.modules.mappings.models import StoreAgentMapping
 from app.modules.product_categories.models import ProductCategory
@@ -49,20 +50,11 @@ SCOPE_SOURCES: dict[str, list[str]] = {
 }
 
 
-# ── Window arithmetic ────────────────────────────────────────────────────
-
-
-def _shift(year: int, month: int, delta_months: int) -> tuple[int, int]:
-    """Adună `delta_months` la (year, month) — `delta_months` poate fi negativ."""
-    total = year * 12 + (month - 1) + delta_months
-    return total // 12, (total % 12) + 1
-
-
-def _window_pairs(latest: tuple[int, int], n: int) -> list[tuple[int, int]]:
-    """N perechi (year, month) terminate la `latest`, inclusiv. Sortat asc."""
-    y, m = latest
-    out = [_shift(y, m, -i) for i in range(n - 1, -1, -1)]
-    return out
+# Window arithmetic — folosim `app.core.period_math` ca sa avem o singura
+# sursa de adevar pentru calculele pe luni calendaristice. Pastram alias-uri
+# private pentru continuitate, dar consumatorii ar trebui sa importe public.
+_shift = shift_months
+_window_pairs = window_pairs
 
 
 # ── Public dataclasses ───────────────────────────────────────────────────
@@ -352,7 +344,7 @@ async def _categories(
     - scope=adp  → ProductCategory.code (MU/EPS/UMEDE/VARSACI/DIBLURI etc.)
     - scope=sika → Target Market (Building Finishing / Sealing & Bonding /
       Waterproofing & Roofing / Concrete & Anchors / Flooring /
-      Industry & Accessories / Altele) prin `_classify_sika_tm(product.name)`
+      Industry & Accessories / Altele) prin `classify_sika_tm(product.name)`
     """
     if not pairs_curr:
         return []
@@ -461,9 +453,9 @@ async def _categories_sika(
     pairs_yoy: list[tuple[int, int]],
 ) -> list[CategoryRow]:
     """Sika variant — grupează pe Target Market (TM) derivat din numele
-    produsului via `grupe_produse._classify_sika_tm`. „Altele" devine bucket-ul
+    produsului via `grupe_produse.classify_sika_tm`. „Altele" devine bucket-ul
     pentru produsele neclasificate (inclusiv non-Sika apărute pe batch Sika)."""
-    from app.modules.grupe_produse.service import _classify_sika_tm
+    from app.modules.grupe_produse.service import classify_sika_tm
 
     all_pairs = list(pairs_curr) + list(pairs_yoy)
     years = {y for (y, _m) in all_pairs}
@@ -499,7 +491,7 @@ async def _categories_sika(
     sku_curr: dict[str, set[UUID]] = {}
     sku_yoy: dict[str, set[UUID]] = {}
     for r in sales_rows:
-        tm = _classify_sika_tm(str(r.pname or ""))
+        tm = classify_sika_tm(str(r.pname or ""))
         ym = (int(r.year), int(r.month))
         amt = Decimal(r.amt or 0)
         qty = Decimal(r.qty or 0)

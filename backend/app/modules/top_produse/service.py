@@ -391,7 +391,7 @@ async def _products_for_sika_tm(
 ) -> set[UUID]:
     """ID-urile produselor Sika care cad în TM-ul dat (match pe nume)."""
     from app.modules.brands.models import Brand
-    from app.modules.grupe_produse.service import _classify_sika_tm
+    from app.modules.grupe_produse.service import classify_sika_tm
 
     rows = (await session.execute(
         select(Product.id, Product.name)
@@ -401,7 +401,7 @@ async def _products_for_sika_tm(
             Brand.name == "Sika",
         )
     )).all()
-    return {r.id for r in rows if _classify_sika_tm(r.name) == tm_label}
+    return {r.id for r in rows if classify_sika_tm(r.name) == tm_label}
 
 
 async def _monthly_rows_by_ids(
