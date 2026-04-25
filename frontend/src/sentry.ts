@@ -27,7 +27,9 @@ export function initSentry(opts: InitOptions = {}): void {
   initialized = true;
   const environment = opts.environment ?? import.meta.env.VITE_SENTRY_ENVIRONMENT ?? "production";
   const release = opts.release ?? import.meta.env.VITE_APP_VERSION ?? "dev";
-  const tracesSampleRate = opts.tracesSampleRate ?? 0.1;
+  const envRate = Number.parseFloat(import.meta.env.VITE_SENTRY_TRACES_SAMPLE_RATE ?? "");
+  const tracesSampleRate =
+    opts.tracesSampleRate ?? (Number.isFinite(envRate) ? envRate : 1.0);
 
   // Dynamic import — chunk-ul Sentry se încarcă async doar acum (dev build
   // fără DSN nu-l include niciodată). Vite creează un JS chunk separat.
