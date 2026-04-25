@@ -15,7 +15,7 @@ from app.modules.analiza_pe_luni.schemas import (
     ApLResponse,
     ApLYearTotals,
 )
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids
 
 router = APIRouter(prefix="/api/analiza-pe-luni", tags=["analiza-pe-luni"])
 
@@ -95,7 +95,7 @@ def _build_response(scope: str, data: dict) -> ApLResponse:
 async def get_analiza_pe_luni(
     scope: str = Query("adp", description="'adp' | 'sika' | 'sikadp'"),
     year: int | None = Query(None, ge=2000, le=2100),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = scope.lower()
@@ -108,15 +108,49 @@ async def get_analiza_pe_luni(
     now = datetime.now(timezone.utc)
     year_curr = year or now.year
 
-    # Nu setăm months_filter explicit — service-ul auto-detectează lunile cu
-    # date în year_curr și filtrează ambii ani pe acel set (perioade
-    # echivalente). Ex. dacă 2026 are Ian-Apr, arătăm Ian-Apr și pentru 2025.
+    async def _fetch_one(tid: UUID) -> dict:
+        if scope == "adp":
+            return await svc.get_for_adp(session, tid, year_curr=year_curr)
+        if scope == "sika":
+            return await svc.get_for_sika(session, tid, year_curr=year_curr)
+        return await svc.get_for_sikadp(session, tid, year_curr=year_curr)
 
-    if scope == "adp":
-        data = await svc.get_for_adp(session, tenant_id, year_curr=year_curr)
-    elif scope == "sika":
-        data = await svc.get_for_sika(session, tenant_id, year_curr=year_curr)
-    else:
-        data = await svc.get_for_sikadp(session, tenant_id, year_curr=year_curr)
+    parts = [await _fetch_one(tid) for tid in org_ids]
+    if len(parts) == 1:
+        return _build_response(scope, parts[0])
 
-    return _build_response(scope, data)
+    # Merge: agentii cu acelasi nume insumati cross-org.
+    by_name: dict[str, svc.AgentMonthly] = {}
+    last_update = None
+    for p in parts:
+        if p.get("last_update") is not None:
+            if last_update is None or p["last_update"] > last_update:
+                last_update = p["last_update"]
+        for a in p["agents"]:
+            existing = by_name.get(a.agent_name)
+            if existing is None:
+                by_name[a.agent_name] = a
+            else:
+                for m in range(1, 13):
+                    existing.months[m].sales_y1 += a.months[m].sales_y1
+                    existing.months[m].sales_y2 += a.months[m].sales_y2
+                    existing.months[m].diff = (
+                        existing.months[m].sales_y2 - existing.months[m].sales_y1
+                    )
+                    y1 = existing.months[m].sales_y1
+                    diff = existing.months[m].diff
+                    existing.months[m].pct = (
+                        (diff / y1 * Decimal(100)) if y1 != 0 else None
+                    )
+
+    merged = {
+        "year_curr": parts[0]["year_curr"],
+        "year_prev": parts[0]["year_prev"],
+        "last_update": last_update,
+        "agents": sorted(
+            by_name.values(),
+            key=lambda a: a.totals().sales_y2,
+            reverse=True,
+        ),
+    }
+    return _build_response(scope, merged)

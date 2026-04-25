@@ -638,10 +638,15 @@ const FULL_CONSOLIDATED_PATHS = [
   "/analiza/margine",
   "/analiza/marja-lunara",
   "/consolidat",
+  "/analiza/luni",
+  "/analiza/top-magazine",
 ];
+const FULL_CONSOLIDATED_EXACT = ["/"];
 
 function SikadpBanner({ pathname }: { pathname: string }) {
-  const fullSupport = FULL_CONSOLIDATED_PATHS.some((p) => pathname.startsWith(p));
+  const fullSupport =
+    FULL_CONSOLIDATED_EXACT.includes(pathname) ||
+    FULL_CONSOLIDATED_PATHS.some((p) => pathname.startsWith(p));
   if (fullSupport) return null;
   return (
     <div style={{
