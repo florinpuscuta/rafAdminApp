@@ -47,6 +47,7 @@ from app.modules.probleme.router import router as probleme_router
 from app.modules.product_categories.router import router as product_categories_router
 from app.modules.products.router import router as products_router
 from app.modules.prognoza.router import router as prognoza_router
+from app.modules.promotions.router import router as promotions_router
 from app.modules.rapoarte_lunar.router import router as rapoarte_lunar_router
 from app.modules.rapoarte_word.router import router as rapoarte_word_router
 from app.modules.reports.router import router as reports_router
@@ -98,6 +99,7 @@ MODULE_ROUTERS: list[APIRouter] = [
     targhet_router,
     bonusari_router,
     prognoza_router,
+    promotions_router,
     activitate_router,
     parcurs_router,
     probleme_router,

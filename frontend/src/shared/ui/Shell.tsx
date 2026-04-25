@@ -90,6 +90,7 @@ function buildSikadpTree(): NavItem[] {
       children: [
         { kind: "leaf", to: "/analiza/margine", label: "Marja medie" },
         { kind: "leaf", to: "/analiza/marja-lunara", label: "Marja instantanee lunara" },
+    { kind: "leaf", to: "/analiza/promotii", label: "Scenarii Promotii" },
       ],
     },
     {
@@ -203,6 +204,7 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
   const marjaChildren: LeafItem[] = [
     { kind: "leaf", to: "/analiza/margine", label: "Marja medie" },
     { kind: "leaf", to: "/analiza/marja-lunara", label: "Marja instantanee lunara" },
+    { kind: "leaf", to: "/analiza/promotii", label: "Scenarii Promotii" },
   ];
   const magazineChildren: LeafItem[] = [
     { kind: "leaf", to: "/analiza/magazin", label: "Analiza Magazin" },

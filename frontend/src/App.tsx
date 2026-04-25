@@ -29,6 +29,7 @@ import EpsDetailsPage from "./features/eps/EpsDetailsPage";
 import DiscountRulesPage from "./features/discountrules/DiscountRulesPage";
 import MarginePage from "./features/margine/MarginePage";
 import MarjaLunaraPage from "./features/marjalunara/MarjaLunaraPage";
+import PromotionsPage from "./features/promotions/PromotionsPage";
 import PretProductiePage from "./features/pretproductie/PretProductiePage";
 import UploadAdpPage from "./features/uploads/UploadAdpPage";
 import UploadOrdersAdpPage from "./features/uploads/UploadOrdersAdpPage";
@@ -241,6 +242,7 @@ function AuthedShell() {
           <Route path="/settings/pret-productie" element={<RouteBoundary name="settings-pret-productie"><PretProductiePage /></RouteBoundary>} />
           <Route path="/analiza/margine" element={<RouteBoundary name="analiza-margine"><MarginePage /></RouteBoundary>} />
           <Route path="/analiza/marja-lunara" element={<RouteBoundary name="analiza-marja-lunara"><MarjaLunaraPage /></RouteBoundary>} />
+          <Route path="/analiza/promotii" element={<RouteBoundary name="analiza-promotii"><PromotionsPage /></RouteBoundary>} />
           <Route path="/settings/discount-rules" element={<RouteBoundary name="settings-discount-rules"><DiscountRulesPage /></RouteBoundary>} />
           <Route path="/settings/mappings" element={<RouteBoundary name="settings-mappings"><MappingsPage /></RouteBoundary>} />
           <Route path="/settings/allocate-agents" element={<RouteBoundary name="settings-allocate-agents"><AllocateAgentsPage /></RouteBoundary>} />
