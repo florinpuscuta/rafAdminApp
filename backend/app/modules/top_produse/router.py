@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids
 from app.modules.top_produse import service as svc
 from app.modules.top_produse.schemas import (
     TopProduseCategoryInfo,
@@ -100,7 +100,7 @@ async def get_top_produse(
                        description="Codul categoriei, ex 'EPS', 'MU'"),
     year: int | None = Query(None, ge=2000, le=2100),
     limit: int = Query(20, ge=1, le=100),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = scope.lower()
@@ -119,10 +119,13 @@ async def get_top_produse(
         tm_resolved = svc.resolve_tm(group)
         assert tm_resolved is not None
         tm_code, tm_label = tm_resolved
-        data = await svc.get_for_sika_tm(
-            session, tenant_id,
-            year_curr=year_curr, tm_label=tm_label, limit=limit,
-        )
+        parts_tm = []
+        for tid in org_ids:
+            parts_tm.append(await svc.get_for_sika_tm(
+                session, tid,
+                year_curr=year_curr, tm_label=tm_label, limit=limit,
+            ))
+        data = _merge_parts(parts_tm, limit) if len(parts_tm) > 1 else parts_tm[0]
         categories = await svc.list_categories(session)
         return _build_response(scope, tm_code, tm_label, limit, data, categories)
 
@@ -135,21 +138,44 @@ async def get_top_produse(
         )
     category_id, group_label = resolved
 
-    if scope == "adp":
-        data = await svc.get_for_adp(
-            session, tenant_id,
-            year_curr=year_curr, category_id=category_id, limit=limit,
-        )
-    elif scope == "sika":
-        data = await svc.get_for_sika(
-            session, tenant_id,
-            year_curr=year_curr, category_id=category_id, limit=limit,
-        )
-    else:
-        data = await svc.get_for_sikadp(
-            session, tenant_id,
-            year_curr=year_curr, category_id=category_id, limit=limit,
-        )
+    parts: list[dict] = []
+    for tid in org_ids:
+        if scope == "adp":
+            d = await svc.get_for_adp(
+                session, tid,
+                year_curr=year_curr, category_id=category_id, limit=limit,
+            )
+        elif scope == "sika":
+            d = await svc.get_for_sika(
+                session, tid,
+                year_curr=year_curr, category_id=category_id, limit=limit,
+            )
+        else:
+            d = await svc.get_for_sikadp(
+                session, tid,
+                year_curr=year_curr, category_id=category_id, limit=limit,
+            )
+        parts.append(d)
+    data = _merge_parts(parts, limit) if len(parts) > 1 else parts[0]
 
     categories = await svc.list_categories(session)
     return _build_response(scope, group.upper(), group_label, limit, data, categories)
+
+
+def _merge_parts(parts: list[dict], limit: int) -> dict:
+    """Produsele sunt unique per org (split pe brand). Concatenam si re-sortam."""
+    all_products: list[svc.TopProductRow] = []
+    last_update = None
+    for p in parts:
+        all_products.extend(p.get("products", []))
+        if p.get("last_update") is not None:
+            if last_update is None or p["last_update"] > last_update:
+                last_update = p["last_update"]
+    all_products.sort(key=lambda x: x.sales_y2, reverse=True)
+    return {
+        "products": all_products[:limit],
+        "year_curr": parts[0]["year_curr"],
+        "year_prev": parts[0]["year_prev"],
+        "last_update": last_update,
+        "ytd_months": parts[0].get("ytd_months", []),
+    }

@@ -640,6 +640,7 @@ const FULL_CONSOLIDATED_PATHS = [
   "/consolidat",
   "/analiza/luni",
   "/analiza/top-magazine",
+  "/topprod/",
 ];
 const FULL_CONSOLIDATED_EXACT = ["/"];
 
