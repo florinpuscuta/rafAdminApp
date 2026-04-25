@@ -25,6 +25,7 @@ class OrganizationKind(str, Enum):
 # CREATE la metadata.create_all (l-a creat migrarea).
 _organization_kind_pg = PG_ENUM(
     OrganizationKind, name="organization_kind", create_type=False,
+    values_callable=lambda enum: [e.value for e in enum],
 )
 
 

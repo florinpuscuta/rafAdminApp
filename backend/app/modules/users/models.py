@@ -19,7 +19,10 @@ class UserRole(str, Enum):
     VIEWER = "viewer"
 
 
-_user_role_pg = PG_ENUM(UserRole, name="user_role", create_type=False)
+_user_role_pg = PG_ENUM(
+    UserRole, name="user_role", create_type=False,
+    values_callable=lambda enum: [e.value for e in enum],
+)
 
 
 class User(Base):

@@ -2,11 +2,9 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ApiError } from "../../shared/api";
-import { useConfirm } from "../../shared/ui/ConfirmDialog";
 import { CardSkeleton, Skeleton, TableSkeleton } from "../../shared/ui/Skeleton";
 import { useAuth } from "../auth/AuthContext";
 import { downloadDashboardReport, getOverview, listCategories, listChains } from "./api";
-import { seedDemoData } from "./demoApi";
 import { useToast } from "../../shared/ui/ToastProvider";
 import MonthlyBarChart from "./MonthlyBarChart";
 import type { DashboardOverview, TopChainRow } from "./types";
@@ -36,9 +34,7 @@ interface ScopeState {
 export default function DashboardPage() {
   const { user } = useAuth();
   const toast = useToast();
-  const confirm = useConfirm();
   const [params, setParams] = useSearchParams();
-  const [seedingDemo, setSeedingDemo] = useState(false);
 
   const [data, setData] = useState<DashboardOverview | null>(null);
   const [year, setYear] = useState<number | null>(
@@ -153,29 +149,6 @@ export default function DashboardPage() {
   if (!data) return null;
 
   const hasData = data.kpis.totalRows > 0;
-  const isAdmin = user?.role === "admin";
-
-  async function handleSeedDemo() {
-    const ok = await confirm({
-      title: "Încarcă date demo?",
-      message:
-        "Vor fi create 7 magazine, 5 agenți, 10 produse și ~500 rânduri de vânzări sintetice pe ultimele 12 luni. Poți folosi /api/demo/wipe mai târziu ca să le ștergi.",
-      confirmLabel: "Încarcă demo",
-    });
-    if (!ok) return;
-    setSeedingDemo(true);
-    try {
-      const r = await seedDemoData();
-      toast.success(
-        `Date demo încărcate: ${r.stores} magazine · ${r.agents} agenți · ${r.products} produse · ${r.sales} vânzări`,
-      );
-      await load(year, month, chain, category, scope);
-    } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Eroare la încărcare demo");
-    } finally {
-      setSeedingDemo(false);
-    }
-  }
 
   return (
     <div>
@@ -289,20 +262,6 @@ export default function DashboardPage() {
           <p style={{ margin: "0 0 8px" }}>
             Nu ai încă date. Încarcă un fișier Excel din <Link to="/sales">Vânzări</Link>.
           </p>
-          {isAdmin && (
-            <>
-              <p style={{ margin: "12px 0 8px", fontSize: 13, color: "var(--fg-muted, #666)" }}>
-                Sau explorează funcționalitățile cu <strong>date demo sintetice</strong>:
-              </p>
-              <button
-                onClick={handleSeedDemo}
-                disabled={seedingDemo}
-                style={styles.demoBtn}
-              >
-                {seedingDemo ? "Se încarcă…" : "Încarcă date demo"}
-              </button>
-            </>
-          )}
         </div>
       ) : (
         <>
