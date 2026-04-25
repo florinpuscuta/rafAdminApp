@@ -288,7 +288,12 @@ async def build_marja_lunara(
     to_month: int,
 ) -> MarjaLunaraData:
     pairs = margine_svc.period_pairs(from_year, from_month, to_year, to_month)
-    rules = await load_rules_dict(session, tenant_id, scope)
+    # `discount_rules.scope` are doar 'adp' sau 'sika'; pentru margine
+    # scope='sikadp' incarcam ambele tipuri.
+    rule_scopes = ["adp", "sika"] if scope == "sikadp" else [scope]
+    rules: dict[tuple[str, str, str], bool] = {}
+    for rs in rule_scopes:
+        rules.update(await load_rules_dict(session, tenant_id, rs))
     months_out: list[MLMonth] = []
     for (y, m) in pairs:
         ml_month = await _build_month(

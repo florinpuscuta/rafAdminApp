@@ -9,7 +9,6 @@ import {
 import { NavLink, useLocation } from "react-router-dom";
 
 import { useAuth } from "../../features/auth/AuthContext";
-import OrgSwitcher from "../../features/orgs/OrgSwitcher";
 import { getFacturiBonusPendingCount } from "../../features/evaluareagenti/api";
 import PageCaptureFab from "./PageCaptureFab";
 import { useTheme } from "./ThemeProvider";
@@ -601,9 +600,6 @@ export function Shell({ children }: { children: ReactNode }) {
                 }}
               >
                 {user?.email}
-              </div>
-              <div style={{ marginTop: 4 }}>
-                <OrgSwitcher />
               </div>
               <div style={{ display: "flex", gap: 6 }}>
                 <button onClick={() => void logout()} style={styles.logoutBtn}>

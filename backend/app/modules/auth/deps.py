@@ -77,23 +77,30 @@ async def get_current_user(
     return user
 
 
-async def get_current_tenant_id(
+_ORG_ALL_SENTINEL = "all"
+
+
+async def get_current_org_ids(
     request: Request,
     user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
-) -> UUID:
-    """Returneaza organization_id-ul ACTIV pentru request-ul curent.
+) -> list[UUID]:
+    """Returneaza lista de organization_id-uri ACTIVE pentru request-ul curent.
 
     Logica:
-      1. Daca exista header `X-Active-Org-Id` si user e membru → folosim acel
-         organization_id (switch multi-org stateless).
-      2. Altfel: fallback la `users.tenant_id` (orga default a userului).
-
-    Refuzam (403) daca header e prezent dar user NU e membru in acea orga.
+      1. Header `X-Active-Org-Id: all` → toate org-urile user-ului (consolidated).
+      2. Header `X-Active-Org-Id: <UUID>` → o singura orga (validata membership).
+      3. Fara header → [user.tenant_id] (orga default).
     """
     requested = request.headers.get("x-active-org-id")
     if not requested:
-        return user.tenant_id
+        return [user.tenant_id]
+    if requested.lower() == _ORG_ALL_SENTINEL:
+        memberships = await users_service.list_user_memberships(session, user.id)
+        ids = [m.organization_id for m in memberships]
+        if not ids:
+            ids = [user.tenant_id]
+        return ids
     try:
         requested_id = UUID(requested)
     except ValueError:
@@ -102,8 +109,7 @@ async def get_current_tenant_id(
             detail={"code": "invalid_org_id", "message": "X-Active-Org-Id invalid"},
         )
     if requested_id == user.tenant_id:
-        return requested_id
-    # Verificam membership
+        return [requested_id]
     if not await users_service.is_member(session, user.id, requested_id):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -113,7 +119,25 @@ async def get_current_tenant_id(
             },
         )
     bind_request_context(user_id=str(user.id), tenant_id=str(requested_id))
-    return requested_id
+    return [requested_id]
+
+
+async def get_current_tenant_id(
+    org_ids: list[UUID] = Depends(get_current_org_ids),
+) -> UUID:
+    """Single-org dep — pentru endpoint-uri care NU suporta consolidated view.
+    Daca user-ul a trimis `X-Active-Org-Id: all`, returnam 400.
+    """
+    if len(org_ids) != 1:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "single_org_required",
+                "message": "Acest endpoint nu suporta consolidated view (sikadp). "
+                           "Selecteaza o singura organizatie.",
+            },
+        )
+    return org_ids[0]
 
 
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:

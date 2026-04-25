@@ -1,3 +1,4 @@
+from decimal import Decimal
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, status
@@ -5,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids
 from app.modules.margine import service as svc
 from app.modules.margine.schemas import (
     MargineGroupRow,
@@ -46,6 +47,77 @@ def _validate_period(
         )
 
 
+def _safe_div(num: Decimal, den: Decimal) -> Decimal:
+    return num / den if den != 0 else Decimal(0)
+
+
+def _consolidate(parts: list[svc.MargineData]) -> svc.MargineData:
+    """Suma cifrelor a N raspunsuri per-org. Pentru SIKADP doar adunam,
+    fara sa rulam algoritmul cross-org (paritate cu single-org views).
+    """
+    first = parts[0]
+    revenue_period = sum((p.revenue_period for p in parts), Decimal(0))
+    revenue_covered = sum((p.revenue_covered for p in parts), Decimal(0))
+    cost_total = sum((p.cost_total for p in parts), Decimal(0))
+    profit_total = revenue_covered - cost_total
+    margin_pct = _safe_div(profit_total, revenue_covered) * Decimal(100)
+    coverage_pct = _safe_div(revenue_covered, revenue_period) * Decimal(100)
+    discount_total = sum((p.discount_total for p in parts), Decimal(0))
+    discount_allocated_total = sum(
+        (p.discount_allocated_total for p in parts), Decimal(0),
+    )
+    profit_net_total = profit_total + discount_allocated_total
+    margin_pct_net = _safe_div(profit_net_total, revenue_covered) * Decimal(100)
+    products_with_cost = sum((p.products_with_cost for p in parts), 0)
+    products_missing_cost = sum((p.products_missing_cost for p in parts), 0)
+
+    # Grupele se concateneaza — fara overlap intre orgs (produsele sunt strict
+    # split-uite intre Adeplast si Sika). Daca apare overlap, sumam.
+    groups_by_key: dict[tuple[str, str], svc.GroupRow] = {}
+    for p in parts:
+        for g in p.groups:
+            k = (g.kind, g.key)
+            existing = groups_by_key.get(k)
+            if existing is None:
+                groups_by_key[k] = g
+                continue
+            existing.revenue += g.revenue
+            existing.quantity += g.quantity
+            existing.cost_total += g.cost_total
+            existing.profit += g.profit
+            existing.discount_allocated += g.discount_allocated
+            existing.profit_net = existing.profit + existing.discount_allocated
+            existing.margin_pct = _safe_div(existing.profit, existing.revenue) * Decimal(100)
+            existing.margin_pct_net = _safe_div(existing.profit_net, existing.revenue) * Decimal(100)
+            existing.products.extend(g.products)
+    groups = sorted(groups_by_key.values(), key=lambda x: x.revenue, reverse=True)
+
+    missing: list[svc.MissingCostRow] = []
+    for p in parts:
+        missing.extend(p.missing_cost)
+    missing.sort(key=lambda x: x.revenue, reverse=True)
+
+    return svc.MargineData(
+        scope=first.scope,
+        from_year=first.from_year, from_month=first.from_month,
+        to_year=first.to_year, to_month=first.to_month,
+        revenue_period=revenue_period,
+        revenue_covered=revenue_covered,
+        cost_total=cost_total,
+        profit_total=profit_total,
+        margin_pct=margin_pct,
+        coverage_pct=coverage_pct,
+        discount_total=discount_total,
+        discount_allocated_total=discount_allocated_total,
+        profit_net_total=profit_net_total,
+        margin_pct_net=margin_pct_net,
+        products_with_cost=products_with_cost,
+        products_missing_cost=products_missing_cost,
+        groups=groups,
+        missing_cost=missing,
+    )
+
+
 @router.get("", response_model=MargineResponse)
 async def get_margine(
     scope: str = Query("adp"),
@@ -53,18 +125,21 @@ async def get_margine(
     from_month: int = Query(..., alias="fromMonth"),
     to_year: int = Query(..., alias="toYear"),
     to_month: int = Query(..., alias="toMonth"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> MargineResponse:
     s = _validate_scope(scope)
     _validate_period(from_year, from_month, to_year, to_month)
-    data = await svc.build_margine(
-        session,
-        tenant_id=tenant_id,
-        scope=s,
-        from_year=from_year, from_month=from_month,
-        to_year=to_year, to_month=to_month,
-    )
+
+    parts: list[svc.MargineData] = []
+    for tid in org_ids:
+        parts.append(await svc.build_margine(
+            session,
+            tenant_id=tid, scope=s,
+            from_year=from_year, from_month=from_month,
+            to_year=to_year, to_month=to_month,
+        ))
+    data = parts[0] if len(parts) == 1 else _consolidate(parts)
     return MargineResponse(
         scope=data.scope,
         from_year=data.from_year, from_month=data.from_month,

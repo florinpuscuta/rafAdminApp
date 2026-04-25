@@ -35,8 +35,6 @@ export default function OrgSwitcher() {
   }, []);
 
   if (loading || memberships.length === 0) return null;
-  // Daca user-ul e membru intr-o singura orga, nu afisam dropdown — o singura
-  // optiune e zgomot vizual.
   if (memberships.length === 1) {
     return (
       <span style={styles.singleOrg} title={memberships[0].name}>
@@ -45,13 +43,14 @@ export default function OrgSwitcher() {
     );
   }
 
-  function onChange(id: string) {
-    setActiveOrgId(id);
-    setActiveIdState(id);
-    // Hard reload ca sa rulam toate query-urile cu noul header.
+  function onChange(value: string) {
+    setActiveOrgId(value);
+    setActiveIdState(value);
     window.location.reload();
   }
 
+  // "all" = sentinel pentru consolidated view cross-org (vezi backend
+  // get_current_org_ids — accept "all" header → toate org-urile user-ului).
   return (
     <select
       value={activeId ?? memberships[0].organizationId}
@@ -64,6 +63,7 @@ export default function OrgSwitcher() {
           {m.name}{m.kind !== "production" ? ` (${m.kind})` : ""}
         </option>
       ))}
+      <option value="all">⊕ Consolidat (toate)</option>
     </select>
   );
 }

@@ -711,7 +711,13 @@ async def build_margine(
         k = (chain, kg[0], kg[1])
         rev_per_cg[k] = rev_per_cg.get(k, Decimal(0)) + rev
 
-    rules = await load_rules_dict(session, tenant_id, scope)
+    # `discount_rules.scope` are doar 'adp' sau 'sika' — pentru margine
+    # scope='sikadp' incarcam ambele tipuri (in cazul rar in care un singur
+    # tenant are reguli pentru ambele).
+    rule_scopes = ["adp", "sika"] if scope == "sikadp" else [scope]
+    rules: dict[tuple[str, str, str], bool] = {}
+    for rs in rule_scopes:
+        rules.update(await load_rules_dict(session, tenant_id, rs))
 
     def _applies(chain: str, kind: str, key: str) -> bool:
         # Sub-grupele Marca Privata (mp::EPS, mp::MU, ...) cad sub regula
