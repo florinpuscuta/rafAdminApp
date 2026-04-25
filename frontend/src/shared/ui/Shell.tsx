@@ -651,15 +651,7 @@ const FULL_CONSOLIDATED_PATHS = [
   "/evaluare/sal-fix",
   "/targhet",
   "/gallery",
-  "/marketing",
-  "/aprobari",
   "/analiza/promotii",
-  "/chat",
-  "/rapoarte",
-  "/bonusari",
-  "/taskuri",
-  "/parcurs",
-  "/probleme",
 ];
 const FULL_CONSOLIDATED_EXACT = ["/", "/evaluare"];
 

@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api import APIRouter
 from app.core.db import get_session
 from app.modules.audit import service as audit_service
-from app.modules.auth.deps import get_current_tenant_id, get_current_user
+from app.modules.auth.deps import (
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from app.modules.promotions import service as svc
 from app.modules.promotions.models import Promotion, PromotionTarget
 from app.modules.promotions.schemas import (
@@ -21,7 +25,9 @@ from app.modules.promotions.schemas import (
     PromotionOut,
     PromotionTargetOut,
 )
+from app.modules.tenants.models import Organization
 from app.modules.users.models import User
+from sqlalchemy import select
 
 
 router = APIRouter(prefix="/api/promotions", tags=["promotions"])
@@ -95,14 +101,16 @@ async def _to_out(
 async def list_promotions(
     scope: str | None = Query(None),
     status_filter: str | None = Query(None, alias="status"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> PromotionListResponse:
-    promos = await svc.list_promotions(
-        session, tenant_id,
-        scope=scope.lower() if scope else None,
-        status=status_filter,
-    )
+    promos: list[Promotion] = []
+    for tid in org_ids:
+        promos.extend(await svc.list_promotions(
+            session, tid,
+            scope=scope.lower() if scope else None,
+            status=status_filter,
+        ))
     items = [await _to_out(session, p) for p in promos]
     return PromotionListResponse(items=items)
 
@@ -110,10 +118,14 @@ async def list_promotions(
 @router.get("/{promo_id}", response_model=PromotionOut)
 async def get_promotion(
     promo_id: UUID,
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> PromotionOut:
-    promo = await svc.get_promotion(session, tenant_id, promo_id)
+    promo: Promotion | None = None
+    for tid in org_ids:
+        promo = await svc.get_promotion(session, tid, promo_id)
+        if promo is not None:
+            break
     if promo is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={
             "code": "not_found", "message": "Promotie inexistenta",
@@ -121,16 +133,48 @@ async def get_promotion(
     return await _to_out(session, promo)
 
 
+_SCOPE_TO_SLUG = {"adp": "adeplast", "sika": "sika"}
+
+
+async def _resolve_tenant_for_scope(
+    session: AsyncSession, user: User, org_ids: list[UUID], scope: str,
+) -> UUID:
+    """Map scope la org-ul corespunzător din membership-urile user-ului.
+
+    În SIKADP consolidated mode org_ids are 2 entries — pickăm pe cel cu
+    slug-ul matching ('adeplast' / 'sika'). În single-org mode, org_ids
+    are 1 entry → folosim ăla.
+    """
+    if len(org_ids) == 1:
+        return org_ids[0]
+    target_slug = _SCOPE_TO_SLUG.get(scope)
+    if target_slug:
+        res = await session.execute(
+            select(Organization.id).where(
+                Organization.id.in_(org_ids),
+                Organization.slug == target_slug,
+            )
+        )
+        match = res.scalar_one_or_none()
+        if match is not None:
+            return match
+    return user.tenant_id
+
+
 @router.post("", response_model=PromotionOut, status_code=status.HTTP_201_CREATED)
 async def create_promotion(
     payload: PromotionIn,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> PromotionOut:
     _validate_payload(payload)
+    target_tenant = await _resolve_tenant_for_scope(
+        session, current_user, org_ids, payload.scope,
+    )
     promo = await svc.create_promotion(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=target_tenant,
         user_id=current_user.id,
         scope=payload.scope, name=payload.name, status=payload.status,
         discount_type=payload.discount_type, value=payload.value,
@@ -142,7 +186,7 @@ async def create_promotion(
     await audit_service.log_event(
         session,
         event_type="promotions.created",
-        tenant_id=current_user.tenant_id,
+        tenant_id=target_tenant,
         user_id=current_user.id,
         target_type="promotion",
         target_id=promo.id,
@@ -156,12 +200,22 @@ async def update_promotion(
     promo_id: UUID,
     payload: PromotionIn,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> PromotionOut:
     _validate_payload(payload)
+    existing = None
+    for tid in org_ids:
+        existing = await svc.get_promotion(session, tid, promo_id)
+        if existing is not None:
+            break
+    if existing is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail={
+            "code": "not_found", "message": "Promotie inexistenta",
+        })
     promo = await svc.update_promotion(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=existing.tenant_id,
         promo_id=promo_id,
         fields={
             "scope": payload.scope, "name": payload.name, "status": payload.status,
@@ -179,7 +233,7 @@ async def update_promotion(
     await audit_service.log_event(
         session,
         event_type="promotions.updated",
-        tenant_id=current_user.tenant_id,
+        tenant_id=existing.tenant_id,
         user_id=current_user.id,
         target_type="promotion",
         target_id=promo.id,
@@ -192,17 +246,23 @@ async def update_promotion(
 async def delete_promotion(
     promo_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    ok = await svc.delete_promotion(session, current_user.tenant_id, promo_id)
-    if not ok:
+    existing = None
+    for tid in org_ids:
+        existing = await svc.get_promotion(session, tid, promo_id)
+        if existing is not None:
+            break
+    if existing is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={
             "code": "not_found", "message": "Promotie inexistenta",
         })
+    await svc.delete_promotion(session, existing.tenant_id, promo_id)
     await audit_service.log_event(
         session,
         event_type="promotions.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=existing.tenant_id,
         user_id=current_user.id,
         target_type="promotion",
         target_id=promo_id,
@@ -215,7 +275,7 @@ async def delete_promotion(
 async def simulate(
     promo_id: UUID,
     baseline: str = Query("yoy", description="'yoy' | 'mom'"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> PromoSimResponse:
     if baseline not in svc.BASELINE_KINDS:
@@ -223,9 +283,13 @@ async def simulate(
             status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_baseline", "message": "baseline trebuie 'yoy' sau 'mom'"},
         )
-    data = await svc.simulate(
-        session, tenant_id=tenant_id, promo_id=promo_id, baseline_kind=baseline,
-    )
+    data = None
+    for tid in org_ids:
+        data = await svc.simulate(
+            session, tenant_id=tid, promo_id=promo_id, baseline_kind=baseline,
+        )
+        if data is not None:
+            break
     if data is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail={
             "code": "not_found", "message": "Promotie inexistenta",
@@ -256,22 +320,37 @@ async def search_products(
     scope: str = Query("adp"),
     q: str = Query("", description="Filtru fuzzy pe cod sau nume"),
     limit: int = Query(500, ge=1, le=2000),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> ProductSearchResponse:
     s = _validate_scope(scope)
-    items = await svc.search_products(
-        session, tenant_id=tenant_id, scope=s, q=q, limit=limit,
-    )
-    return ProductSearchResponse(items=[ProductSearchItem(**it) for it in items])
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for tid in org_ids:
+        for it in await svc.search_products(
+            session, tenant_id=tid, scope=s, q=q, limit=limit,
+        ):
+            if it["code"] in seen:
+                continue
+            seen.add(it["code"])
+            merged.append(it)
+    return ProductSearchResponse(items=[ProductSearchItem(**it) for it in merged])
 
 
 @router.get("/groups", response_model=GroupsResponse)
 async def list_groups(
     scope: str = Query("adp"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> GroupsResponse:
     s = _validate_scope(scope)
-    items = await svc.list_groups(session, tenant_id=tenant_id, scope=s)
-    return GroupsResponse(items=[GroupOption(**it) for it in items])
+    seen: set[tuple[str, str]] = set()
+    merged: list[dict] = []
+    for tid in org_ids:
+        for it in await svc.list_groups(session, tenant_id=tid, scope=s):
+            sig = (it["kind"], it["key"])
+            if sig in seen:
+                continue
+            seen.add(sig)
+            merged.append(it)
+    return GroupsResponse(items=[GroupOption(**it) for it in merged])
