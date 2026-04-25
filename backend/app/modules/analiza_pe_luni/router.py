@@ -119,7 +119,9 @@ async def get_analiza_pe_luni(
     if len(parts) == 1:
         return _build_response(scope, parts[0])
 
-    # Merge: agentii cu acelasi nume insumati cross-org.
+    # Merge: agentii cu acelasi nume insumati cross-org. AgentMonthCell are
+    # diff/pct ca property-uri calculate, deci doar sales_y1/sales_y2 se
+    # modifica direct.
     by_name: dict[str, svc.AgentMonthly] = {}
     last_update = None
     for p in parts:
@@ -134,14 +136,6 @@ async def get_analiza_pe_luni(
                 for m in range(1, 13):
                     existing.months[m].sales_y1 += a.months[m].sales_y1
                     existing.months[m].sales_y2 += a.months[m].sales_y2
-                    existing.months[m].diff = (
-                        existing.months[m].sales_y2 - existing.months[m].sales_y1
-                    )
-                    y1 = existing.months[m].sales_y1
-                    diff = existing.months[m].diff
-                    existing.months[m].pct = (
-                        (diff / y1 * Decimal(100)) if y1 != 0 else None
-                    )
 
     merged = {
         "year_curr": parts[0]["year_curr"],
