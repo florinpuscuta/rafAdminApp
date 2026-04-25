@@ -8,3 +8,7 @@ dist/
 .vscode/
 .idea/
 .DS_Store
+*.tsbuildinfo
+
+# Claude Code local artifacts
+.claude/
