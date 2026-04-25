@@ -15,9 +15,10 @@ Pentru scope='adp' grupele afisate in matrix sunt categoriile + 'Marca Privata'
 ca rand separat. Aceasta separare reflecta logica businessului: la Dedeman /
 Hornbach, EPS si Marca Privata NU primesc discount, dar restul categoriilor da.
 """
+from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -47,3 +48,15 @@ class DiscountRule(Base):
     group_kind: Mapped[str] = mapped_column(String(20), nullable=False)
     group_key: Mapped[str] = mapped_column(String(100), nullable=False)
     applies: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False,
+        server_default=func.now(), onupdate=func.now(),
+    )
+    updated_by_user_id: Mapped[UUID | None] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )

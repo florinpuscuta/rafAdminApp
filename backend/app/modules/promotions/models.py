@@ -80,3 +80,6 @@ class PromotionTarget(Base):
     # 'tm' (key=TM label), 'private_label' (key='marca_privata'),
     # 'all' (key=ignored)
     key: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
