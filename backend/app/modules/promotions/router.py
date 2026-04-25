@@ -115,6 +115,50 @@ async def list_promotions(
     return PromotionListResponse(items=items)
 
 
+@router.get("/products", response_model=ProductSearchResponse)
+async def search_products(
+    scope: str = Query("adp"),
+    q: str = Query("", description="Filtru fuzzy pe cod sau nume"),
+    limit: int = Query(500, ge=1, le=2000),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
+    session: AsyncSession = Depends(get_session),
+) -> ProductSearchResponse:
+    s = _validate_scope(scope)
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for tid in org_ids:
+        for it in await svc.search_products(
+            session, tenant_id=tid, scope=s, q=q, limit=limit,
+        ):
+            if it["code"] in seen:
+                continue
+            seen.add(it["code"])
+            merged.append(it)
+    return ProductSearchResponse(items=[ProductSearchItem(**it) for it in merged])
+
+
+@router.get("/groups", response_model=GroupsResponse)
+async def list_groups(
+    scope: str = Query("adp"),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
+    session: AsyncSession = Depends(get_session),
+) -> GroupsResponse:
+    s = _validate_scope(scope)
+    seen: set[tuple[str, str]] = set()
+    merged: list[dict] = []
+    for tid in org_ids:
+        for it in await svc.list_groups(session, tenant_id=tid, scope=s):
+            sig = (it["kind"], it["key"])
+            if sig in seen:
+                continue
+            seen.add(sig)
+            merged.append(it)
+    return GroupsResponse(items=[GroupOption(**it) for it in merged])
+
+
+# IMPORTANT: rute cu segment literal ('/products', '/groups') TREBUIE
+# declarate ÎNAINTE de '/{promo_id}' — altfel FastAPI încearcă să parseze
+# 'products'/'groups' ca UUID și aruncă 422.
 @router.get("/{promo_id}", response_model=PromotionOut)
 async def get_promotion(
     promo_id: UUID,
@@ -313,44 +357,3 @@ async def simulate(
         delta_margin_pp=data["delta_margin_pp"],
         groups=[PromoSimGroupRow(**g) for g in data["groups"]],
     )
-
-
-@router.get("/products", response_model=ProductSearchResponse)
-async def search_products(
-    scope: str = Query("adp"),
-    q: str = Query("", description="Filtru fuzzy pe cod sau nume"),
-    limit: int = Query(500, ge=1, le=2000),
-    org_ids: list[UUID] = Depends(get_current_org_ids),
-    session: AsyncSession = Depends(get_session),
-) -> ProductSearchResponse:
-    s = _validate_scope(scope)
-    seen: set[str] = set()
-    merged: list[dict] = []
-    for tid in org_ids:
-        for it in await svc.search_products(
-            session, tenant_id=tid, scope=s, q=q, limit=limit,
-        ):
-            if it["code"] in seen:
-                continue
-            seen.add(it["code"])
-            merged.append(it)
-    return ProductSearchResponse(items=[ProductSearchItem(**it) for it in merged])
-
-
-@router.get("/groups", response_model=GroupsResponse)
-async def list_groups(
-    scope: str = Query("adp"),
-    org_ids: list[UUID] = Depends(get_current_org_ids),
-    session: AsyncSession = Depends(get_session),
-) -> GroupsResponse:
-    s = _validate_scope(scope)
-    seen: set[tuple[str, str]] = set()
-    merged: list[dict] = []
-    for tid in org_ids:
-        for it in await svc.list_groups(session, tenant_id=tid, scope=s):
-            sig = (it["kind"], it["key"])
-            if sig in seen:
-                continue
-            seen.add(sig)
-            merged.append(it)
-    return GroupsResponse(items=[GroupOption(**it) for it in merged])
