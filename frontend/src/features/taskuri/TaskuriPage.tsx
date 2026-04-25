@@ -481,7 +481,7 @@ export default function TaskuriPage() {
                     ) : (
                       <div style={styles.assigneeList}>
                         {task.assignees.map((a) => (
-                          <span key={a.agentId} style={styles.assigneeChip}>
+                          <span key={a.agentId} className="agent-private" style={styles.assigneeChip}>
                             {a.agentName}
                           </span>
                         ))}

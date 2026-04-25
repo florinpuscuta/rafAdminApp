@@ -9,6 +9,9 @@ from app.modules.activitate.router import router as activitate_router
 from app.modules.agents.router import router as agents_router
 from app.modules.ai.router import router as ai_router
 from app.modules.analiza_magazin.router import router as analiza_magazin_router
+from app.modules.analiza_magazin_dashboard.router import (
+    router as analiza_magazin_dashboard_router,
+)
 from app.modules.analiza_pe_luni.router import router as analiza_pe_luni_router
 from app.modules.app_settings.router import router as app_settings_router
 from app.modules.api_keys.router import router as api_keys_router
@@ -20,12 +23,15 @@ from app.modules.comenzi_fara_ind.router import router as comenzi_fara_ind_route
 from app.modules.consolidat.router import router as consolidat_router
 from app.modules.dashboard.router import router as dashboard_router
 from app.modules.demo.router import router as demo_router
+from app.modules.discount_rules.router import router as discount_rules_router
 from app.modules.eps.router import router as eps_router
 from app.modules.evaluare_agenti.router import router as evaluare_agenti_router
 from app.modules.gallery.router import router as gallery_router
 from app.modules.grupe_produse.router import router as grupe_produse_router
 from app.modules.mappings.router import router as mappings_router
 from app.modules.marca_privata.router import router as marca_privata_router
+from app.modules.margine.router import router as margine_router
+from app.modules.marja_lunara.router import router as marja_lunara_router
 from app.modules.mkt_catalog.router import router as mkt_catalog_router
 from app.modules.mkt_concurenta.router import router as mkt_concurenta_router
 from app.modules.mkt_facing.router import router as mkt_facing_router
@@ -36,6 +42,7 @@ from app.modules.mortare.router import router as mortare_router
 from app.modules.orders.router import router as orders_router
 from app.modules.parcurs.router import router as parcurs_router
 from app.modules.prices.router import router as prices_router
+from app.modules.pret_productie.router import router as pret_productie_router
 from app.modules.probleme.router import router as probleme_router
 from app.modules.product_categories.router import router as product_categories_router
 from app.modules.products.router import router as products_router
@@ -68,7 +75,9 @@ MODULE_ROUTERS: list[APIRouter] = [
     reports_router,
     ai_router,
     demo_router,
+    discount_rules_router,
     prices_router,
+    pret_productie_router,
     product_categories_router,
     brands_router,
     eps_router,
@@ -77,11 +86,14 @@ MODULE_ROUTERS: list[APIRouter] = [
     vz_la_zi_router,
     analiza_pe_luni_router,
     analiza_magazin_router,
+    analiza_magazin_dashboard_router,
     comenzi_fara_ind_router,
     # Feature migrations
     grupe_produse_router,
     top_produse_router,
     marca_privata_router,
+    margine_router,
+    marja_lunara_router,
     mortare_router,
     targhet_router,
     bonusari_router,

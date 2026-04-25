@@ -364,7 +364,7 @@ function AgentTableCard({
                   ? ((avgFcPerMonth - avgHistPerMonth) / avgHistPerMonth) * 100
                   : null;
               return (
-                <tr key={a.agentId ?? "unassigned"}>
+                <tr key={a.agentId ?? "unassigned"} className="agent-section">
                   <td style={styles.td}>{a.agentName}</td>
                   <td style={styles.tdNum}>{fmtRo(hist)}</td>
                   {a.forecastMonths.map((m, i) => (

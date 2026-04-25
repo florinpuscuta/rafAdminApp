@@ -81,7 +81,7 @@ export default function SalFixPage() {
   };
 
   return (
-    <div style={styles.wrap}>
+    <div className="agent-section" style={styles.wrap}>
       <div style={styles.header}>
         <div>
           <h1 style={styles.title}>Sal Fix</h1>

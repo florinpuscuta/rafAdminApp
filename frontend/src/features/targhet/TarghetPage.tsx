@@ -284,11 +284,13 @@ export default function TarghetPage() {
             />
           </div>
 
-          <AgentsTable
-            agents={data.agents}
-            activeMonths={activeMonths}
-            pctByMonth={pctByMonth}
-          />
+          <div className="agent-section">
+            <AgentsTable
+              agents={data.agents}
+              activeMonths={activeMonths}
+              pctByMonth={pctByMonth}
+            />
+          </div>
         </>
       )}
     </div>

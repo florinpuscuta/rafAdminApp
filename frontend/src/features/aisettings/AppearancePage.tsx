@@ -4,6 +4,7 @@ import {
   ZOOM_OPTIONS,
   useTheme,
 } from "../../shared/ui/ThemeProvider";
+import { usePrivacy } from "../../shared/ui/PrivacyProvider";
 
 /**
  * Appearance / Aspect — controale pentru dimensiune font și magnifier (zoom).
@@ -11,6 +12,7 @@ import {
  */
 export default function AppearancePage() {
   const { theme, setTheme, fontScale, setFontScale, zoom, setZoom } = useTheme();
+  const { hideAgents, toggleHideAgents } = usePrivacy();
 
   return (
     <div style={styles.page}>
@@ -94,6 +96,28 @@ export default function AppearancePage() {
             </button>
           ))}
         </div>
+      </section>
+
+      {/* Confidențialitate — ascunde date despre agenți */}
+      <section style={styles.section}>
+        <div style={styles.label}>Confidențialitate</div>
+        <p style={styles.hint}>
+          Ascunde toate datele despre agenți (nume, performanță individuală)
+          pentru analiză cu persoane din afara firmei. Numele sunt înlocuite
+          cu "Agent A", "Agent B" etc.
+        </p>
+        <button
+          type="button"
+          onClick={toggleHideAgents}
+          style={{
+            ...styles.optBtn,
+            ...(hideAgents ? styles.optBtnActive : {}),
+            alignSelf: "flex-start",
+            minWidth: 220,
+          }}
+        >
+          {hideAgents ? "🔒 Mod confidențial ACTIV" : "🔓 Activează mod confidențial"}
+        </button>
       </section>
 
       {/* Reset */}

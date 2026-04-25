@@ -188,11 +188,13 @@ export default function BonusariPage() {
             />
           </div>
 
-          <AgentsTable
-            agents={data.agents}
-            activeMonths={activeMonths}
-            currentMonthLimit={data.currentMonthLimit}
-          />
+          <div className="agent-section">
+            <AgentsTable
+              agents={data.agents}
+              activeMonths={activeMonths}
+              currentMonthLimit={data.currentMonthLimit}
+            />
+          </div>
         </>
       )}
     </div>

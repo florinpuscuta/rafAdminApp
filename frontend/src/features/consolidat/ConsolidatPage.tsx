@@ -335,7 +335,7 @@ function AgentsTable({
         const diffn = toNum(r.diff);
         const storesState = storesByAgent[id];
         return (
-          <div key={id}>
+          <div key={id} className="agent-section">
             <div
               style={styles.agentRow}
               onClick={() => toggle(id, r.agentId)}

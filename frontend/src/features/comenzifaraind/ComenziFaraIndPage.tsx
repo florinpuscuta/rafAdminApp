@@ -183,6 +183,7 @@ export default function ComenziFaraIndPage() {
                 return (
                   <Fragment key={`agent-${akey}`}>
                     <tr
+                      className="agent-section"
                       style={styles.agentRow}
                       onClick={() =>
                         setOpenAgents((s) => ({ ...s, [akey]: !aopen }))

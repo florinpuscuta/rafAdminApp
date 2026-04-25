@@ -1281,6 +1281,33 @@ async def _upsert_decision(
     )
 
 
+async def get_facturi_bonus_pending_count(
+    session: AsyncSession, tenant_id: UUID,
+) -> dict:
+    """Versiune lightweight pentru polling — doar count + amount, fără rows/joins."""
+    stmt = select(
+        RawSale.year, RawSale.month, RawSale.client, RawSale.amount,
+    ).where(
+        RawSale.tenant_id == tenant_id,
+        _facturi_bonus_filter(),
+    )
+    rows = (await session.execute(stmt)).all()
+    decisions = await _load_decisions_map(session, tenant_id)
+
+    pending_count = 0
+    pending_amount = Decimal("0")
+    for year, month, client, amount in rows:
+        chain = _chain_of(client or "")
+        key = (year, month, client or "", amount)
+        decision = decisions.get(key)
+        if chain is None and decision is None:
+            continue
+        if decision is None:
+            pending_count += 1
+            pending_amount += amount
+    return {"pending_count": pending_count, "pending_amount": pending_amount}
+
+
 async def list_facturi_bonus_pending(
     session: AsyncSession, tenant_id: UUID,
 ) -> dict:

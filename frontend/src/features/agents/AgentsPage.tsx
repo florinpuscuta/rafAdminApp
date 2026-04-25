@@ -100,7 +100,7 @@ export default function AgentsPage() {
   }
 
   return (
-    <div>
+    <div className="agent-section">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <h2 style={{ marginTop: 0 }}>Agenți canonici</h2>
         {isAdmin && agents.length >= 2 && (

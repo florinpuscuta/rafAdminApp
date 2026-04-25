@@ -145,7 +145,7 @@ export default function PodiumAgentiPage() {
   const rest = scored.slice(3);
 
   return (
-    <div style={styles.wrap}>
+    <div className="agent-section" style={styles.wrap}>
       <div style={styles.header}>
         <div>
           <h1 style={styles.title}>Podium Agenți</h1>

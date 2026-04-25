@@ -62,6 +62,25 @@ class ScopeInfo(APISchema):
     product_name: str | None = None
 
 
+class StoreRankRow(APISchema):
+    store_id: UUID | None
+    store_name: str
+    chain: str | None
+    total_amount: Decimal
+    row_count: int
+    distinct_products: int
+    rank_value: int  # 1-based, după total_amount desc
+    rank_sku: int    # 1-based, după distinct_products desc
+    score_combined: float  # 0..100, 50/50 pe value + sku (normalizat)
+
+
+class TopStoresByChainResponse(APISchema):
+    chain: str
+    year: int | None
+    available_chains: list[str]
+    rows: list[StoreRankRow]
+
+
 class DashboardOverview(APISchema):
     year: int | None
     month: int | None

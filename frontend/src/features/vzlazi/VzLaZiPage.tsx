@@ -524,7 +524,7 @@ function AgentsTable({
         const ex = toNum(a.exercitiu);
         const realizat = pctRealizat(ex, prev);
         return (
-          <div key={id}>
+          <div key={id} className="agent-section">
             <div
               style={{ ...styles.agentRow, gridTemplateColumns: gridTpl }}
               onClick={() => toggle(id)}

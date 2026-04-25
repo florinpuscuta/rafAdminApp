@@ -213,7 +213,7 @@ export default function SalesPage() {
               <th style={styles.th}>Produs</th>
               <th style={styles.thNum}>Cantitate</th>
               <th style={styles.thNum}>Valoare</th>
-              <th style={styles.th}>Agent</th>
+              <th className="agent-private" style={styles.th}>Agent</th>
             </tr>
           </thead>
           <tbody>
@@ -240,7 +240,7 @@ export default function SalesPage() {
                   <td style={styles.td}>{s.productName ?? "—"}</td>
                   <td style={styles.tdNum}>{s.quantity ?? "—"}</td>
                   <td style={styles.tdNum}>{s.amount}</td>
-                  <td style={styles.td}>{s.agent ?? "—"}</td>
+                  <td className="agent-private" style={styles.td}>{s.agent ?? "—"}</td>
                 </tr>
               ))
             )}

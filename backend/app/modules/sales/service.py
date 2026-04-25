@@ -530,6 +530,37 @@ async def sum_by_store(
     return [(row[0], Decimal(row[1]), int(row[2])) for row in result.all()]
 
 
+async def stats_by_store(
+    session: AsyncSession,
+    tenant_id: UUID,
+    year: int | None,
+    *,
+    month: int | None = None,
+    store_ids_in: list[UUID] | None = None,
+) -> list[tuple[UUID | None, Decimal, int, int]]:
+    """[(store_id, total_amount, row_count, distinct_products), ...] ordonat după total_amount desc."""
+    filters = [RawSale.tenant_id == tenant_id, _ka_filter()]
+    if year is not None:
+        filters.append(RawSale.year == year)
+    if month is not None:
+        filters.append(RawSale.month == month)
+    if store_ids_in is not None:
+        filters.append(RawSale.store_id.in_(store_ids_in) if store_ids_in else RawSale.id == None)
+    stmt = (
+        select(
+            RawSale.store_id,
+            func.coalesce(func.sum(RawSale.amount), 0),
+            func.count(RawSale.id),
+            func.count(func.distinct(RawSale.product_id)),
+        )
+        .where(*filters)
+        .group_by(RawSale.store_id)
+        .order_by(func.sum(RawSale.amount).desc())
+    )
+    result = await session.execute(stmt)
+    return [(r[0], Decimal(r[1]), int(r[2]), int(r[3])) for r in result.all()]
+
+
 async def sum_by_month(
     session: AsyncSession,
     tenant_id: UUID,
@@ -580,6 +611,19 @@ async def sum_by_agent(
     store_ids_in: list[UUID] | None = None,
     product_ids_in: list[UUID] | None = None,
 ) -> list[tuple[UUID | None, Decimal, int]]:
+    """Sumă per agent cu rezoluție canonică SAM (la fel ca Vz la zi / Analiza pe luni).
+
+    Rândurile cu `agent_id IS NULL` sunt rezolvate la runtime prin SAM pe
+    cheia `client_original | ship_to_original` (sau `cheie_finala`) și,
+    ca fallback, prin `agent_store_assignments` pe `store_id`. Doar ce
+    rămâne nerezolvat ajunge cu `agent_id=None` (bucket "Nemapați").
+    """
+    from app.modules.mappings.resolution import (
+        client_sam_map,
+        resolve as resolve_canonical,
+        store_agent_map,
+    )
+
     filters = [RawSale.tenant_id == tenant_id, _ka_filter()]
     if year is not None:
         filters.append(RawSale.year == year)
@@ -594,19 +638,43 @@ async def sum_by_agent(
     if product_ids_in is not None:
         filters.append(RawSale.product_id.in_(product_ids_in) if product_ids_in else RawSale.id == None)
 
+    # Agregăm la nivel de (agent_id, store_id, client) ca să putem aplica SAM
+    # per grup înainte de totalizarea pe agent.
     stmt = (
         select(
             RawSale.agent_id,
-            func.coalesce(func.sum(RawSale.amount), 0),
-            func.count(RawSale.id),
+            RawSale.store_id,
+            RawSale.client,
+            func.coalesce(func.sum(RawSale.amount), 0).label("total"),
+            func.count(RawSale.id).label("cnt"),
         )
         .where(*filters)
-        .group_by(RawSale.agent_id)
-        .order_by(func.sum(RawSale.amount).desc())
-        .limit(limit)
+        .group_by(RawSale.agent_id, RawSale.store_id, RawSale.client)
     )
-    result = await session.execute(stmt)
-    return [(row[0], Decimal(row[1]), int(row[2])) for row in result.all()]
+    rows = (await session.execute(stmt)).all()
+
+    cmap = await client_sam_map(session, tenant_id)
+    store_ids_to_resolve = {
+        r.store_id for r in rows
+        if r.agent_id is None and r.store_id is not None
+    }
+    smap = await store_agent_map(session, tenant_id, store_ids_to_resolve)
+
+    agg: dict[UUID | None, list] = {}
+    for r in rows:
+        resolved_agent, _ = resolve_canonical(
+            agent_id=r.agent_id,
+            store_id=r.store_id,
+            client=r.client,
+            client_map=cmap,
+            store_map=smap,
+        )
+        entry = agg.setdefault(resolved_agent, [Decimal(0), 0])
+        entry[0] += Decimal(r.total)
+        entry[1] += int(r.cnt)
+
+    sorted_rows = sorted(agg.items(), key=lambda kv: kv[1][0], reverse=True)
+    return [(aid, total, cnt) for aid, (total, cnt) in sorted_rows[:limit]]
 
 
 async def sum_by_product(

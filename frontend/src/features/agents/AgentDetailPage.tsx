@@ -70,7 +70,7 @@ export default function AgentDetailPage() {
   const totalAmount = sales.reduce((sum, s) => sum + Number(s.amount), 0);
 
   return (
-    <div>
+    <div className="agent-section">
       <Link to="/agents" style={styles.back}>← Toți agenții</Link>
       <h2 style={{ marginTop: 6 }}>{agent.fullName}</h2>
       <div style={styles.metaRow}>

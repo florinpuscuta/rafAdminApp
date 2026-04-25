@@ -94,6 +94,13 @@ function ensureSkeletonKeyframes() {
   style.id = "skeleton-keyframes";
   style.textContent = [
     "@keyframes skeleton-shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}",
+    "@keyframes bell-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:0.75;transform:scale(1.08)}}",
+    /* Privacy mode — when body has .privacy-agents, completely hide any
+       element marked .agent-section or .agent-private. No info, no count,
+       no hint they exist. Use:
+       - .agent-section on rows, widgets, pages distributed per-agent
+       - .agent-private on individual cells (agent column in mixed tables) */
+    "body.privacy-agents .agent-section,body.privacy-agents .agent-private{display:none!important;}",
     ".skip-link:focus{top:8px!important;}",
     "*{ -webkit-tap-highlight-color:transparent;}",
     "a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:2px solid var(--accent,#2563eb);outline-offset:2px;border-radius:8px;}",

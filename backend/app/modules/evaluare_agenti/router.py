@@ -23,6 +23,7 @@ from app.modules.evaluare_agenti.schemas import (
     FacturaBonusAcceptRequest,
     FacturaBonusAcceptResponse,
     FacturaBonusList,
+    FacturaBonusPendingCount,
     FacturaBonusRow,
     FacturaBonusUnassignRequest,
     FacturaBonusUnassignResponse,
@@ -458,6 +459,15 @@ async def get_salariu_bonus_annual(
 
 
 # ───────────────── Facturi Bonus de Asignat ─────────────────
+
+@router.get("/facturi-bonus/pending-count", response_model=FacturaBonusPendingCount)
+async def get_facturi_bonus_pending_count(
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    data = await svc.get_facturi_bonus_pending_count(session, tenant_id)
+    return FacturaBonusPendingCount(**data)
+
 
 @router.get("/facturi-bonus", response_model=FacturaBonusList)
 async def list_facturi_bonus(

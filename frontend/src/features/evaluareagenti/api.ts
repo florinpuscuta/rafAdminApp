@@ -9,6 +9,7 @@ import type {
   DashboardResponse,
   FacturaBonusAcceptResponse,
   FacturaBonusList,
+  FacturaBonusPendingCount,
   FacturaBonusUnassignResponse,
   MonthInputList,
   MonthInputRow,
@@ -170,6 +171,12 @@ export function getSalariuBonusAnnual(
 
 export function getFacturiBonus(): Promise<FacturaBonusList> {
   return apiFetch<FacturaBonusList>("/api/evaluare-agenti/facturi-bonus");
+}
+
+export function getFacturiBonusPendingCount(): Promise<FacturaBonusPendingCount> {
+  return apiFetch<FacturaBonusPendingCount>(
+    "/api/evaluare-agenti/facturi-bonus/pending-count",
+  );
 }
 
 export function acceptFacturiBonus(

@@ -8,7 +8,7 @@ import type { CSSProperties } from "react";
  */
 export default function EvaluareHubPage() {
   return (
-    <div style={styles.wrap}>
+    <div className="agent-section" style={styles.wrap}>
       <h1 style={styles.title}>Evaluare</h1>
       <p style={styles.lead}>
         Evaluare agenți și zone: introduci datele lunar, apoi analizezi

@@ -22,10 +22,11 @@ async def list_by_chain(
     session: AsyncSession, tenant_id: UUID, chain: str
 ) -> list[Store]:
     """Caz-insensitive match pe chain."""
+    from sqlalchemy import func as _f
     result = await session.execute(
         select(Store).where(
             Store.tenant_id == tenant_id,
-            Store.chain == chain,
+            _f.lower(Store.chain) == chain.lower(),
         )
     )
     return list(result.scalars().all())

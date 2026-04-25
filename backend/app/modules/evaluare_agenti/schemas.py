@@ -266,6 +266,11 @@ class FacturaBonusRow(APISchema):
     decision_source: str | None = None  # "auto" / "manual" / None dacă pending
 
 
+class FacturaBonusPendingCount(APISchema):
+    pending_count: int = 0
+    pending_amount: Decimal = Field(default=Decimal("0"))
+
+
 class FacturaBonusList(APISchema):
     rows: list[FacturaBonusRow] = Field(default_factory=list)
     pending_count: int = 0

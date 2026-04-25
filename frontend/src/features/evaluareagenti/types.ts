@@ -261,6 +261,11 @@ export interface FacturaBonusRow {
   decisionSource: "auto" | "manual" | null;
 }
 
+export interface FacturaBonusPendingCount {
+  pendingCount: number;
+  pendingAmount: string;
+}
+
 export interface FacturaBonusList {
   rows: FacturaBonusRow[];
   pendingCount: number;

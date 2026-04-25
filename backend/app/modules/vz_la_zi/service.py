@@ -237,15 +237,12 @@ async def _orders_rows(
     status NELIVRAT (ADP) sau OPEN (Sika). `nefacturate` = doar status
     NEFACTURAT (ADP; gol pt. Sika).
 
-    ADP: se contabilizează DOAR comenzile cu IND asociat (has_ind=true).
-    Comenzile fără IND sunt în tranzit — intră în Vz la zi abia după ce primesc IND.
+    ADP: `nelivrate` include TOATE comenzile NELIVRAT/OPEN (cu și fără IND).
+    `nefacturate` rămâne doar pentru cele cu IND — fără IND n-au factură încă.
     """
     if source == "adp":
         neliv_status_expr = case(
-            (
-                (RawOrder.status.in_(("NELIVRAT", "OPEN"))) & (RawOrder.has_ind == True),
-                RawOrder.remaining_amount,
-            ),
+            (RawOrder.status.in_(("NELIVRAT", "OPEN")), RawOrder.remaining_amount),
             else_=0,
         )
         nefact_status_expr = case(

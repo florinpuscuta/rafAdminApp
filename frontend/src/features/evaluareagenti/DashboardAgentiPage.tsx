@@ -97,7 +97,7 @@ export default function DashboardAgentiPage() {
   const maxPct = chartRows.length > 0 ? Math.max(...chartRows.map((r) => r.costPct)) : 0;
 
   return (
-    <div style={styles.wrap}>
+    <div className="agent-section" style={styles.wrap}>
       <div style={styles.header}>
         <div>
           <h1 style={styles.title}>Dashboard Agenți</h1>

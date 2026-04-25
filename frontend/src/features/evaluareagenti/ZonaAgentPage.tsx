@@ -109,7 +109,7 @@ export default function ZonaAgentPage() {
   }, [data]);
 
   return (
-    <div style={styles.wrap}>
+    <div className="agent-section" style={styles.wrap}>
       <div style={styles.header}>
         <div>
           <h1 style={styles.title}>Zona Agent</h1>
@@ -161,7 +161,7 @@ export default function ZonaAgentPage() {
                         <span style={{ ...styles.chev, transform: isOpen ? "rotate(90deg)" : "none" }}>
                           ›
                         </span>
-                        {a.agentName}
+                        <span>{a.agentName}</span>
                       </td>
                       <td style={styles.td}>{a.storeCount}</td>
                       <td style={styles.td}>{fmtRo(tgt, 0)}</td>

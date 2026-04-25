@@ -116,7 +116,7 @@ export default function InputLunarAgentPage() {
   });
 
   return (
-    <div style={styles.wrap}>
+    <div className="agent-section" style={styles.wrap}>
       <div style={styles.header}>
         <div>
           <h1 style={styles.title}>Input Lunar Agent</h1>

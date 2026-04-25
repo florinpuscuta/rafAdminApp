@@ -9,6 +9,7 @@ import {
 import { NavLink, useLocation } from "react-router-dom";
 
 import { useAuth } from "../../features/auth/AuthContext";
+import { getFacturiBonusPendingCount } from "../../features/evaluareagenti/api";
 import PageCaptureFab from "./PageCaptureFab";
 import { useTheme } from "./ThemeProvider";
 import {
@@ -42,6 +43,7 @@ interface LeafItem {
   end?: boolean;
   labelColor?: string; // override pentru elementele "speciale" (ex: Vedere Gen)
   highlight?: boolean; // gradient special (Prognoză Vânzări)
+  badge?: number; // 🔔 notification count (0 = no bell)
 }
 
 interface ParentItem {
@@ -81,6 +83,23 @@ function buildSikadpTree(): NavItem[] {
         { kind: "leaf", to: "/analiza/zi", label: "Vz la zi" },
       ],
     },
+    {
+      kind: "parent",
+      id: "marja",
+      label: "Marja",
+      children: [
+        { kind: "leaf", to: "/analiza/margine", label: "Marja medie" },
+        { kind: "leaf", to: "/analiza/marja-lunara", label: "Marja instantanee lunara" },
+      ],
+    },
+    {
+      kind: "parent",
+      id: "analiza-magazine",
+      label: "Analiza Magazine",
+      children: [
+        { kind: "leaf", to: "/analiza/top-magazine", label: "Top Magazine pe Client" },
+      ],
+    },
     { kind: "divider" },
     {
       kind: "parent",
@@ -106,7 +125,6 @@ function buildSikadpTree(): NavItem[] {
       children: [
         { kind: "leaf", to: "/chat", label: "AI Asistent" },
         { kind: "leaf", to: "/rapoarte/lunar", label: "Raport Lunar Management" },
-        { kind: "leaf", to: "/rapoarte/playwright", label: "📸 Playwright (capturi pagini)" },
       ],
     },
     { kind: "divider" },
@@ -138,7 +156,6 @@ function buildSikadpTree(): NavItem[] {
       children: [
         { kind: "leaf", to: "/evaluare/dashboard", label: "Dashboard agenți" },
         { kind: "leaf", to: "/evaluare/podium", label: "Podium agenți", labelColor: "#d4af37" },
-        { kind: "leaf", to: "/evaluare/facturi-bonus", label: "Facturi bonus de asignat" },
         { kind: "leaf", to: "/evaluare/cost-anual", label: "Analiza costuri zona an" },
         { kind: "leaf", to: "/evaluare/agent-anual", label: "Analiza anuală pe agent" },
       ],
@@ -182,7 +199,15 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
     { kind: "leaf", to: "/consolidat", label: "Consolidat" },
     { kind: "leaf", to: "/analiza/luni", label: "Analiza pe luni" },
     { kind: "leaf", to: "/analiza/zi", label: "Vz la zi" },
+  ];
+  const marjaChildren: LeafItem[] = [
+    { kind: "leaf", to: "/analiza/margine", label: "Marja medie" },
+    { kind: "leaf", to: "/analiza/marja-lunara", label: "Marja instantanee lunara" },
+  ];
+  const magazineChildren: LeafItem[] = [
     { kind: "leaf", to: "/analiza/magazin", label: "Analiza Magazin" },
+    { kind: "leaf", to: "/analiza/magazin-dashboard", label: "Dashboard Magazin" },
+    { kind: "leaf", to: "/analiza/top-magazine", label: "Top Magazine pe Client" },
   ];
   if (scope === "adeplast") {
     analizaChildren.push({
@@ -212,6 +237,18 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
       id: "analiza-vanzari",
       label: "Analiza Vanzari",
       children: analizaChildren,
+    },
+    {
+      kind: "parent",
+      id: "marja",
+      label: "Marja",
+      children: marjaChildren,
+    },
+    {
+      kind: "parent",
+      id: "analiza-magazine",
+      label: "Analiza Magazine",
+      children: magazineChildren,
     },
     {
       kind: "parent",
@@ -254,11 +291,16 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
   ];
 
   if (scope === "adeplast") {
-    tree.push(
-      { kind: "leaf", to: "/mortar", label: "Mortare Silozuri (Vrac)" },
-      { kind: "leaf", to: "/eps", label: "EPS Detalii (Val + Cant)" },
-      { kind: "leaf", to: "/privatelabel", label: "Marca Privata" },
-    );
+    tree.push({
+      kind: "parent",
+      id: "analiza-specifica",
+      label: "Analiza specifica",
+      children: [
+        { kind: "leaf", to: "/mortar", label: "Mortare Silozuri (Vrac)" },
+        { kind: "leaf", to: "/eps", label: "EPS Detalii (Val + Cant)" },
+        { kind: "leaf", to: "/privatelabel", label: "Marca Privata" },
+      ],
+    });
   }
   tree.push(
     { kind: "divider" },
@@ -273,18 +315,34 @@ function buildCompanyTree(scope: "adeplast" | "sika"): NavItem[] {
   return tree;
 }
 
-function buildSettingsTree(isAdmin: boolean): NavItem[] {
+function buildSettingsTree(isAdmin: boolean, facturiBonusPending: number = 0): NavItem[] {
   const tree: NavItem[] = [
     {
       kind: "parent",
-      id: "settings-upload",
-      label: "Upload Date",
+      id: "settings-upload-adp",
+      label: "Upload Adeplast",
       children: [
-        { kind: "leaf", to: "/settings/upload-adp", label: "Upload Date Brute (ADP)" },
-        { kind: "leaf", to: "/settings/upload-sika", label: "Upload Sika Excel" },
-        { kind: "leaf", to: "/settings/upload-sika-mtd", label: "Upload Vz MTD (SIKA)" },
-        { kind: "leaf", to: "/settings/upload-orders-adp", label: "Upload Comenzi Open (ADP)" },
-        { kind: "leaf", to: "/settings/upload-orders-sika", label: "Upload Comenzi Open (SIKA)" },
+        { kind: "leaf", to: "/settings/upload-adp", label: "Upload Vanzari totale (Adp)" },
+        { kind: "leaf", to: "/settings/upload-orders-adp", label: "Upload Comenzi la zi (Adp)" },
+      ],
+    },
+    {
+      kind: "parent",
+      id: "settings-upload-sika",
+      label: "Upload Sika",
+      children: [
+        { kind: "leaf", to: "/settings/upload-sika", label: "Upload Vanzari totale (Sika)" },
+        { kind: "leaf", to: "/settings/upload-sika-mtd", label: "Upload Vanzari la zi (Sika)" },
+        { kind: "leaf", to: "/settings/upload-orders-sika", label: "Upload Comenzi la zi (Sika)" },
+      ],
+    },
+    { kind: "leaf", to: "/settings/pret-productie", label: "Pret Productie (ADP/SIKA)" },
+    {
+      kind: "parent",
+      id: "settings-comerciale",
+      label: "Conditii Comerciale",
+      children: [
+        { kind: "leaf", to: "/settings/discount-rules", label: "Discount KA pe Grupe" },
       ],
     },
     {
@@ -295,6 +353,12 @@ function buildSettingsTree(isAdmin: boolean): NavItem[] {
         { kind: "leaf", to: "/settings/mappings", label: "Magazine & Agenți (tabel)" },
         { kind: "leaf", to: "/settings/allocate-agents", label: "Alocă agenți (nealocate)" },
         { kind: "leaf", to: "/unmapped/products", label: "Produse nemapate" },
+        {
+          kind: "leaf",
+          to: "/evaluare/facturi-bonus",
+          label: "Facturi bonus de asignat",
+          badge: facturiBonusPending,
+        },
       ],
     },
     {
@@ -349,19 +413,6 @@ function buildSettingsTree(isAdmin: boolean): NavItem[] {
 
 // ─────────────────────────────────────────────────────────────────────
 
-const EXPANDED_LS_KEY = "adeplast_sidebar_expanded";
-
-function loadExpandedState(): Record<string, boolean> {
-  try {
-    const raw = localStorage.getItem(EXPANDED_LS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return typeof parsed === "object" && parsed !== null ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
 export function Shell({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
   const { theme, toggle } = useTheme();
@@ -377,9 +428,8 @@ export function Shell({ children }: { children: ReactNode }) {
   const [isMobile, setIsMobile] = useState(() =>
     window.matchMedia("(max-width: 768px)").matches,
   );
-  const [expanded, setExpanded] = useState<Record<string, boolean>>(() =>
-    loadExpandedState(),
-  );
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [facturiBonusPending, setFacturiBonusPending] = useState(0);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 768px)");
@@ -389,43 +439,38 @@ export function Shell({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setMobileOpen(false);
-  }, [location.pathname, scope, inSettings]);
+    let cancelled = false;
+    const tick = () => {
+      getFacturiBonusPendingCount()
+        .then((d) => {
+          if (!cancelled) setFacturiBonusPending(d.pendingCount ?? 0);
+        })
+        .catch(() => {
+          /* silent — stale count OK */
+        });
+    };
+    tick();
+    const id = window.setInterval(tick, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [location.pathname]);
 
   useEffect(() => {
-    try {
-      localStorage.setItem(EXPANDED_LS_KEY, JSON.stringify(expanded));
-    } catch {
-      /* ignore quota errors */
-    }
-  }, [expanded]);
+    setMobileOpen(false);
+    setExpanded({});
+  }, [location.pathname, scope, inSettings]);
 
   const navTree = useMemo<NavItem[]>(() => {
-    if (inSettings) return buildSettingsTree(Boolean(isAdmin));
+    if (inSettings) return buildSettingsTree(Boolean(isAdmin), facturiBonusPending);
     if (scope === "sikadp") return buildSikadpTree();
     return buildCompanyTree(scope);
-  }, [scope, inSettings, isAdmin]);
-
-  const activeParentId = useMemo(() => {
-    for (const item of navTree) {
-      if (item.kind !== "parent") continue;
-      if (
-        item.children.some((c) =>
-          c.to === "/" ? location.pathname === "/" : location.pathname.startsWith(c.to),
-        )
-      ) {
-        return item.id;
-      }
-    }
-    return null;
-  }, [navTree, location.pathname]);
+  }, [scope, inSettings, isAdmin, facturiBonusPending]);
 
   const isExpanded = useCallback(
-    (id: string) => {
-      if (expanded[id] !== undefined) return expanded[id];
-      return id === activeParentId;
-    },
-    [expanded, activeParentId],
+    (id: string) => expanded[id] === true,
+    [expanded],
   );
 
   const toggleExpanded = useCallback((id: string) => {
@@ -512,20 +557,31 @@ export function Shell({ children }: { children: ReactNode }) {
                       end={item.end}
                       labelColor={item.labelColor}
                       highlight={item.highlight}
+                      badge={item.badge}
                     >
                       {item.label}
                     </LeafLink>
                   );
                 }
+                const parentBadge = item.children.reduce(
+                  (n, c) => n + (c.badge ?? 0),
+                  0,
+                );
                 return (
                   <TreeParent
                     key={item.id}
                     label={item.label}
                     expanded={isExpanded(item.id)}
                     onToggle={() => toggleExpanded(item.id)}
+                    badge={parentBadge}
                   >
                     {item.children.map((c) => (
-                      <LeafLink key={c.to} to={c.to} child>
+                      <LeafLink
+                        key={c.to}
+                        to={c.to}
+                        child
+                        badge={c.badge}
+                      >
                         {c.label}
                       </LeafLink>
                     ))}
@@ -635,11 +691,13 @@ function TreeParent({
   label,
   expanded,
   onToggle,
+  badge,
   children,
 }: {
   label: string;
   expanded: boolean;
   onToggle: () => void;
+  badge?: number;
   children: ReactNode;
 }) {
   return (
@@ -659,10 +717,37 @@ function TreeParent({
         >
           ▸
         </span>
-        <span>{label}</span>
+        <span style={{ flex: 1 }}>{label}</span>
+        {badge !== undefined && badge > 0 && (
+          <NotificationBell count={badge} />
+        )}
       </button>
       {expanded && <div style={{ marginBottom: 2 }}>{children}</div>}
     </div>
+  );
+}
+
+function NotificationBell({ count }: { count: number }) {
+  return (
+    <span
+      aria-label={`${count} notificări noi`}
+      title={`${count} notificări noi`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 3,
+        fontSize: 11,
+        fontWeight: 700,
+        color: "#f59e0b",
+        background: "rgba(245, 158, 11, 0.15)",
+        border: "1px solid rgba(245, 158, 11, 0.4)",
+        borderRadius: 10,
+        padding: "1px 6px",
+        animation: "bell-pulse 1.6s ease-in-out infinite",
+      }}
+    >
+      🔔 {count}
+    </span>
   );
 }
 
@@ -672,6 +757,7 @@ function LeafLink({
   child,
   labelColor,
   highlight,
+  badge,
   children,
 }: {
   to: string;
@@ -679,6 +765,7 @@ function LeafLink({
   child?: boolean;
   labelColor?: string;
   highlight?: boolean;
+  badge?: number;
   children: ReactNode;
 }) {
   return (
@@ -715,10 +802,14 @@ function LeafLink({
           ...(highlight && !isActive
             ? { borderLeft: "3px solid var(--cyan)" }
             : {}),
+          display: "flex",
+          alignItems: "center",
+          gap: 6,
         };
       }}
     >
-      {children}
+      <span style={{ flex: 1 }}>{children}</span>
+      {badge !== undefined && badge > 0 && <NotificationBell count={badge} />}
     </NavLink>
   );
 }

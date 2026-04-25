@@ -19,9 +19,11 @@ from app.modules.dashboard.schemas import (
     MonthTotalRow,
     OverviewKPIs,
     ScopeInfo,
+    StoreRankRow,
     TopAgentRow,
     TopChainRow,
     TopProductRow,
+    TopStoresByChainResponse,
     TopStoreRow,
 )
 from app.modules.products import service as products_service
@@ -264,4 +266,159 @@ async def overview(
         compare_year=effective_compare,
         compare_kpis=OverviewKPIs(**compare_kpis_data) if compare_kpis_data else None,
         monthly_totals_compare=monthly_totals_compare,
+    )
+
+
+# Cei 4 clienți KA — eticheta din UI → `client_original` din
+# `store_agent_mappings` (sursa de adevăr pentru ierarhia client→magazine).
+_KA_CLIENTS: dict[str, str] = {
+    "Dedeman": "DEDEMAN SRL",
+    "Altex": "ALTEX ROMANIA SRL",
+    "Leroy Merlin": "LEROY MERLIN ROMANIA SRL",
+    "Hornbach": "HORNBACH CENTRALA SRL",
+}
+
+
+# Aceeași convenție ca `analiza_magazin`: scope-ul firmei se traduce în
+# filtru pe ImportBatch.source. "sikadp" = combinat (toate sursele).
+_SCOPE_SOURCES: dict[str, list[str]] = {
+    "adp": ["sales_xlsx"],
+    "sika": ["sika_mtd_xlsx", "sika_xlsx"],
+    "sikadp": ["sales_xlsx", "sika_mtd_xlsx", "sika_xlsx"],
+}
+
+
+@router.get("/top-stores-by-chain", response_model=TopStoresByChainResponse)
+async def top_stores_by_chain(
+    chain: str | None = Query(None),
+    year: int | None = Query(None, ge=1900, le=2100),
+    scope: str | None = Query(None),
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Ranking magazine pentru un client KA (Dedeman / Altex / Leroy / Hornbach).
+
+    Sursa de adevăr e `store_agent_mappings`: `client_original` ne dă lista
+    de magazine canonice (`store_id`) ale clientului. Vânzările se agregă
+    pe acele `store_id` din `raw_sales`, filtrat pe scope-ul firmei.
+    """
+    from sqlalchemy import func, select
+    from app.modules.mappings.models import StoreAgentMapping
+    from app.modules.sales.models import ImportBatch, RawSale
+    from app.modules.stores.models import Store
+
+    available_chains = list(_KA_CLIENTS.keys())
+    years = await sales_service.available_years(session, tenant_id)
+    effective_year = year if year is not None else (years[0] if years else None)
+
+    if not chain or chain not in _KA_CLIENTS:
+        return TopStoresByChainResponse(
+            chain=chain or "",
+            year=effective_year,
+            available_chains=available_chains,
+            rows=[],
+        )
+
+    client_original = _KA_CLIENTS[chain]
+
+    # 1) Magazinele canonice ale clientului (sursa: tabela de mapări).
+    store_ids_q = select(StoreAgentMapping.store_id).where(
+        StoreAgentMapping.tenant_id == tenant_id,
+        StoreAgentMapping.client_original == client_original,
+        StoreAgentMapping.store_id.is_not(None),
+    ).distinct()
+    store_ids = [sid for (sid,) in (await session.execute(store_ids_q)).all() if sid]
+
+    if not store_ids:
+        return TopStoresByChainResponse(
+            chain=chain,
+            year=effective_year,
+            available_chains=available_chains,
+            rows=[],
+        )
+
+    # 2) Agregare vânzări pe acele magazine, cu filtru scope (firmă).
+    stmt = (
+        select(
+            RawSale.store_id.label("sid"),
+            func.coalesce(func.sum(RawSale.amount), 0).label("total"),
+            func.count(RawSale.id).label("rows"),
+            func.count(func.distinct(RawSale.product_id)).label("skus"),
+        )
+        .where(
+            RawSale.tenant_id == tenant_id,
+            RawSale.store_id.in_(store_ids),
+        )
+        .group_by(RawSale.store_id)
+    )
+    if effective_year is not None:
+        stmt = stmt.where(RawSale.year == effective_year)
+
+    sources = _SCOPE_SOURCES.get(scope or "", [])
+    if sources:
+        stmt = stmt.join(ImportBatch, ImportBatch.id == RawSale.batch_id).where(
+            ImportBatch.source.in_(sources)
+        )
+
+    sales_rows = (await session.execute(stmt)).all()
+
+    # 3) Hidratăm numele canonice (din Store).
+    stores_map = await stores_service.get_many(session, tenant_id, store_ids)
+
+    aggregated: list[dict] = []
+    for sid, total, rcount, skus in sales_rows:
+        store = stores_map.get(sid)
+        aggregated.append({
+            "store_id": sid,
+            "store_name": store.name if store else str(sid),
+            "total": Decimal(total or 0),
+            "rows": int(rcount),
+            "skus": int(skus),
+        })
+
+    if not aggregated:
+        return TopStoresByChainResponse(
+            chain=chain,
+            year=effective_year,
+            available_chains=available_chains,
+            rows=[],
+        )
+
+    # 4) Rank-uri și scor combinat.
+    by_value = sorted(aggregated, key=lambda r: r["total"], reverse=True)
+    rank_value = {id(r): i + 1 for i, r in enumerate(by_value)}
+    by_sku = sorted(aggregated, key=lambda r: r["skus"], reverse=True)
+    rank_sku = {id(r): i + 1 for i, r in enumerate(by_sku)}
+
+    n = len(aggregated)
+    out: list[StoreRankRow] = []
+    for r in aggregated:
+        rv = rank_value[id(r)]
+        rs = rank_sku[id(r)]
+        if n > 1:
+            norm_v = (n - rv) / (n - 1) * 100.0
+            norm_s = (n - rs) / (n - 1) * 100.0
+        else:
+            norm_v = norm_s = 100.0
+        out.append(
+            StoreRankRow(
+                store_id=r["store_id"],
+                store_name=r["store_name"],
+                chain=chain,
+                total_amount=r["total"],
+                row_count=r["rows"],
+                distinct_products=r["skus"],
+                rank_value=rv,
+                rank_sku=rs,
+                score_combined=round(0.5 * norm_v + 0.5 * norm_s, 2),
+            )
+        )
+    out.sort(key=lambda r: r.total_amount, reverse=True)
+
+    return TopStoresByChainResponse(
+        chain=chain,
+        year=effective_year,
+        available_chains=available_chains,
+        rows=out,
     )

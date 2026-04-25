@@ -26,18 +26,24 @@ import ChatPage from "./features/ai/ChatPage";
 import DashboardPage from "./features/dashboard/DashboardPage";
 import ConsolidatPage from "./features/consolidat/ConsolidatPage";
 import EpsDetailsPage from "./features/eps/EpsDetailsPage";
+import DiscountRulesPage from "./features/discountrules/DiscountRulesPage";
+import MarginePage from "./features/margine/MarginePage";
+import MarjaLunaraPage from "./features/marjalunara/MarjaLunaraPage";
+import PretProductiePage from "./features/pretproductie/PretProductiePage";
 import UploadAdpPage from "./features/uploads/UploadAdpPage";
 import UploadOrdersAdpPage from "./features/uploads/UploadOrdersAdpPage";
 import UploadOrdersSikaPage from "./features/uploads/UploadOrdersSikaPage";
 import UploadSikaPage from "./features/uploads/UploadSikaPage";
 import UploadSikaMtdPage from "./features/uploads/UploadSikaMtdPage";
 import VzLaZiPage from "./features/vzlazi/VzLaZiPage";
+import TopMagazinePage from "./features/topmagazine/TopMagazinePage";
 import CookieConsent from "./features/legal/CookieConsent";
 import PrivacyPage from "./features/legal/PrivacyPage";
 import TermsPage from "./features/legal/TermsPage";
 import GalleryPage from "./features/gallery/GalleryPage";
 import ActivitatePage from "./features/activitate/ActivitatePage";
 import AnalizaMagazinPage from "./features/analizamagazin/AnalizaMagazinPage";
+import AnalizaMagazinDashboardPage from "./features/analizamagazindashboard/AnalizaMagazinDashboardPage";
 import AnalizaPeLuniPage from "./features/analizapeluni/AnalizaPeLuniPage";
 import BonusariPage from "./features/bonusari/BonusariPage";
 import EvaluareHubPage from "./features/evaluareagenti/EvaluareHubPage";
@@ -62,7 +68,6 @@ import FacingConfigPage from "./features/facingconfig/FacingConfigPage";
 import MktPanouriPage from "./features/mktpanouri/MktPanouriPage";
 import MktSikaPage from "./features/mktsika/MktSikaPage";
 import ApprovalsPage from "./features/approvals/ApprovalsPage";
-import PlaywrightReportPage from "./features/playwrightreport/PlaywrightReportPage";
 import MortarePage from "./features/mortare/MortarePage";
 import ParcursPage from "./features/parcurs/ParcursPage";
 import ProblemePage from "./features/probleme/ProblemePage";
@@ -97,12 +102,14 @@ import { ConfirmProvider } from "./shared/ui/ConfirmDialog";
 import { ErrorBoundary } from "./shared/ui/ErrorBoundary";
 import { RouteBoundary } from "./shared/ui/RouteBoundary";
 import { Shell } from "./shared/ui/Shell";
+import { PrivacyProvider } from "./shared/ui/PrivacyProvider";
 import { ThemeProvider } from "./shared/ui/ThemeProvider";
 
 export default function App() {
   return (
     <BrowserRouter>
       <ThemeProvider>
+       <PrivacyProvider>
         <CompanyScopeProvider>
           <ToastProvider>
             <ConfirmProvider>
@@ -132,6 +139,7 @@ export default function App() {
             </ConfirmProvider>
           </ToastProvider>
         </CompanyScopeProvider>
+       </PrivacyProvider>
       </ThemeProvider>
     </BrowserRouter>
   );
@@ -192,8 +200,10 @@ function AuthedShell() {
               / Preturi / Forecast / Settings Upload. */}
           <Route path="/analiza/luni" element={<RouteBoundary name="analiza-luni"><AnalizaPeLuniPage /></RouteBoundary>} />
           <Route path="/analiza/magazin" element={<NoSikadp><RouteBoundary name="analiza-magazin"><AnalizaMagazinPage /></RouteBoundary></NoSikadp>} />
+          <Route path="/analiza/magazin-dashboard" element={<NoSikadp><RouteBoundary name="analiza-magazin-dashboard"><AnalizaMagazinDashboardPage /></RouteBoundary></NoSikadp>} />
           <Route path="/analiza/zi" element={<RouteBoundary name="analiza-zi"><VzLaZiPage /></RouteBoundary>} />
           <Route path="/analiza/comenzi" element={<RouteBoundary name="analiza-comenzi"><ComenziFaraIndPage /></RouteBoundary>} />
+          <Route path="/analiza/top-magazine" element={<RouteBoundary name="top-magazine"><TopMagazinePage /></RouteBoundary>} />
           <Route path="/marketing/concurenta" element={<RouteBoundary name="marketing-concurenta"><MktConcurentaPage /></RouteBoundary>} />
           <Route path="/marketing/catalog" element={<RouteBoundary name="marketing-catalog"><MktCatalogPage /></RouteBoundary>} />
           <Route path="/marketing/facing" element={<RouteBoundary name="marketing-facing"><MktFacingPage /></RouteBoundary>} />
@@ -201,7 +211,6 @@ function AuthedShell() {
           <Route path="/marketing/facing-config" element={<RouteBoundary name="marketing-facing-config"><FacingConfigPage /></RouteBoundary>} />
           <Route path="/marketing/panouri" element={<RouteBoundary name="marketing-panouri"><MktPanouriPage /></RouteBoundary>} />
           <Route path="/aprobari" element={<RouteBoundary name="aprobari"><ApprovalsPage /></RouteBoundary>} />
-          <Route path="/rapoarte/playwright" element={<RouteBoundary name="rapoarte-playwright"><PlaywrightReportPage /></RouteBoundary>} />
           <Route path="/marketing/sika" element={<RouteBoundary name="marketing-sika"><MktSikaPage /></RouteBoundary>} />
           <Route path="/rapoarte/word" element={<RouteBoundary name="rapoarte-word"><RapoartWordPage /></RouteBoundary>} />
           <Route path="/rapoarte/lunar" element={<RouteBoundary name="rapoarte-lunar"><RapoartLunarPage /></RouteBoundary>} />
@@ -229,6 +238,10 @@ function AuthedShell() {
           <Route path="/settings/upload-sika-mtd" element={<RouteBoundary name="settings-upload-sika-mtd"><UploadSikaMtdPage /></RouteBoundary>} />
           <Route path="/settings/upload-orders-adp" element={<RouteBoundary name="settings-upload-orders-adp"><UploadOrdersAdpPage /></RouteBoundary>} />
           <Route path="/settings/upload-orders-sika" element={<RouteBoundary name="settings-upload-orders-sika"><UploadOrdersSikaPage /></RouteBoundary>} />
+          <Route path="/settings/pret-productie" element={<RouteBoundary name="settings-pret-productie"><PretProductiePage /></RouteBoundary>} />
+          <Route path="/analiza/margine" element={<RouteBoundary name="analiza-margine"><MarginePage /></RouteBoundary>} />
+          <Route path="/analiza/marja-lunara" element={<RouteBoundary name="analiza-marja-lunara"><MarjaLunaraPage /></RouteBoundary>} />
+          <Route path="/settings/discount-rules" element={<RouteBoundary name="settings-discount-rules"><DiscountRulesPage /></RouteBoundary>} />
           <Route path="/settings/mappings" element={<RouteBoundary name="settings-mappings"><MappingsPage /></RouteBoundary>} />
           <Route path="/settings/allocate-agents" element={<RouteBoundary name="settings-allocate-agents"><AllocateAgentsPage /></RouteBoundary>} />
           <Route path="/settings/ai-keys" element={<RouteBoundary name="settings-ai-keys"><AiKeysPage /></RouteBoundary>} />

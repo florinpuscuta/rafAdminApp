@@ -378,19 +378,21 @@ export default function DashboardPage() {
                   : undefined,
               }))}
             />
-            <TopTable
-              title="Top agenți"
-              rows={data.topAgents.map((a) => ({
-                primary: a.agentName,
-                secondary: "",
-                amount: a.totalAmount,
-                count: a.rowCount,
-                muted: a.agentId === null,
-                onClick: a.agentId
-                  ? () => applyScope({ agentId: a.agentId ?? undefined })
-                  : undefined,
-              }))}
-            />
+            <div className="agent-section" style={{ display: "contents" }}>
+              <TopTable
+                title="Top agenți"
+                rows={data.topAgents.map((a) => ({
+                  primary: a.agentName,
+                  secondary: "",
+                  amount: a.totalAmount,
+                  count: a.rowCount,
+                  muted: a.agentId === null,
+                  onClick: a.agentId
+                    ? () => applyScope({ agentId: a.agentId ?? undefined })
+                    : undefined,
+                }))}
+              />
+            </div>
             <TopTable
               title="Top produse"
               rows={data.topProducts.map((p) => ({

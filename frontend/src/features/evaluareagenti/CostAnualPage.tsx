@@ -44,7 +44,7 @@ export default function CostAnualPage() {
   }, []);
 
   return (
-    <div style={styles.wrap}>
+    <div className="agent-section" style={styles.wrap}>
       <div style={styles.header}>
         <div>
           <h1 style={styles.title}>Analiza costuri zona an</h1>

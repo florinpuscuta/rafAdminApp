@@ -402,7 +402,7 @@ function AgentsList({
         const isOpen = expanded.has(id);
         const empty = a.visitsCount === 0;
         return (
-          <div key={id}>
+          <div key={id} className="agent-section">
             <div
               style={{
                 ...styles.agentRow,

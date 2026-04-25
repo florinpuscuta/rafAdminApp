@@ -256,7 +256,7 @@ export default function FacturiBonusAsignatPage() {
                 <th style={styles.th}>Lună</th>
                 <th style={{ ...styles.th, ...styles.right }}>Sumă (RON)</th>
                 <th style={styles.th}>Client</th>
-                <th style={styles.th}>Agent curent</th>
+                <th className="agent-private" style={styles.th}>Agent curent</th>
                 <th style={styles.th}>Magazin curent</th>
                 <th style={styles.th}>→ Agent</th>
                 <th style={styles.th}>→ Magazin</th>
@@ -314,7 +314,7 @@ export default function FacturiBonusAsignatPage() {
                         {shortenClient(r.client)}
                       </span>
                     </td>
-                    <td style={styles.td}>
+                    <td className="agent-private" style={styles.td}>
                       {r.agentName ?? <span style={styles.muted}>—</span>}
                     </td>
                     <td style={styles.td}>
