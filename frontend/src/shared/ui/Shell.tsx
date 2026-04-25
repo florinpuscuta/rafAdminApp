@@ -639,6 +639,7 @@ const FULL_CONSOLIDATED_PATHS = [
   "/analiza/marja-lunara",
   "/consolidat",
   "/analiza/luni",
+  "/analiza/zi",
   "/analiza/top-magazine",
   "/topprod/",
 ];
