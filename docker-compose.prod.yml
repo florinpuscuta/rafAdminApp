@@ -65,6 +65,8 @@ services:
         # Frontend + backend pe același origin prin Caddy — `/api/...` e
         # relative. Lasă gol.
         VITE_API_URL: ""
+        VITE_SENTRY_DSN: ${VITE_SENTRY_DSN:-}
+        VITE_SENTRY_ENVIRONMENT: ${VITE_SENTRY_ENVIRONMENT:-production}
     restart: unless-stopped
     expose:
       - "80"

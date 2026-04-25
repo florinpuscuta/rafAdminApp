@@ -38,6 +38,7 @@ export function initSentry(opts: InitOptions = {}): void {
         environment,
         release,
         tracesSampleRate,
+        integrations: [Sentry.browserTracingIntegration()],
         ignoreErrors: [
           "ResizeObserver loop limit exceeded",
           "ResizeObserver loop completed with undelivered notifications",

@@ -11,6 +11,11 @@ COPY . .
 # Build-time: API URL trimis ca ENV (default=/api, servit prin nginx la aceeași origine)
 ARG VITE_API_URL=""
 ENV VITE_API_URL=$VITE_API_URL
+# Sentry (opțional) — DSN-ul Vite e public (apare în bundle), conform design-ului Sentry.
+ARG VITE_SENTRY_DSN=""
+ENV VITE_SENTRY_DSN=$VITE_SENTRY_DSN
+ARG VITE_SENTRY_ENVIRONMENT="production"
+ENV VITE_SENTRY_ENVIRONMENT=$VITE_SENTRY_ENVIRONMENT
 RUN npm run build
 
 
