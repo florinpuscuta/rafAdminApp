@@ -259,7 +259,7 @@ function AuthedShell() {
           <Route path="/evaluare/agent-anual" element={<SikadpOnly><RouteBoundary name="evaluare-agent-anual"><AgentAnualPage /></RouteBoundary></SikadpOnly>} />
           <Route path="/evaluare/dashboard" element={<SikadpOnly><RouteBoundary name="evaluare-dashboard"><DashboardAgentiPage /></RouteBoundary></SikadpOnly>} />
           <Route path="/evaluare/podium" element={<SikadpOnly><RouteBoundary name="evaluare-podium"><PodiumAgentiPage /></RouteBoundary></SikadpOnly>} />
-          <Route path="/evaluare/facturi-bonus" element={<SikadpOnly><RouteBoundary name="evaluare-facturi-bonus"><FacturiBonusAsignatPage /></RouteBoundary></SikadpOnly>} />
+          <Route path="/evaluare/facturi-bonus" element={<RouteBoundary name="evaluare-facturi-bonus"><FacturiBonusAsignatPage /></RouteBoundary>} />
         </Routes>
       </Shell>
     </>

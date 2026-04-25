@@ -732,6 +732,71 @@ def _norm_product(name: str | None) -> str:
     return s
 
 
+def _norm_for_category(name: str | None) -> str:
+    """Normalizare agresivă pentru match nume → categorie produs canonic.
+    Strip spații, punctuație, diacritice, uppercase.
+    """
+    import re as _re
+    if not name:
+        return ""
+    s = name.upper()
+    repl = str.maketrans({
+        "Ş": "S", "Ș": "S", "Ţ": "T", "Ț": "T",
+        "Ă": "A", "Â": "A", "Î": "I",
+    })
+    s = s.translate(repl)
+    s = _re.sub(r"[^A-Z0-9]", "", s)
+    return s
+
+
+_DIACRITICS_TRANSLATE = str.maketrans({
+    "Ş": "S", "Ș": "S", "ş": "s", "ș": "s",
+    "Ţ": "T", "Ț": "T", "ţ": "t", "ț": "t",
+    "Ă": "A", "ă": "a", "Â": "A", "â": "a",
+    "Î": "I", "î": "i",
+})
+
+
+def _strip_diacritics(s: str) -> str:
+    return s.translate(_DIACRITICS_TRANSLATE) if s else s
+
+
+async def _resolve_label_categories(
+    session: AsyncSession, tenant_id: UUID, labels: set[str],
+) -> dict[str, dict]:
+    """Pentru fiecare label din price_grid, gaseste produsul canonic cel mai
+    similar (pg_trgm similarity peste nume) si returneaza categoria asociata.
+
+    Asigura ca toate produsele cross-KA au categorie — match-uirea cade pe
+    nearest-neighbor cand exact match nu exista."""
+    from sqlalchemy import text as _text
+
+    if not labels:
+        return {}
+
+    # Incarca o singura data toate produsele tenant-ului si calculeaza
+    # similaritatea per label in DB (SELECT-uri scurte, dar evitam un JOIN
+    # array care nu merge clean cu asyncpg).
+    out: dict[str, dict] = {}
+    for lbl in labels:
+        norm = _strip_diacritics(lbl).upper()
+        row = (await session.execute(
+            _text("""
+            SELECT pc.code, pc.label
+            FROM products p
+            JOIN product_categories pc ON pc.id = p.category_id
+            WHERE p.tenant_id = :tid
+              AND p.category_id IS NOT NULL
+            ORDER BY similarity(:lbl, upper(p.name)) DESC
+            LIMIT 1
+            """),
+            {"tid": str(tenant_id), "lbl": norm},
+        )).first()
+        if row:
+            out[lbl] = {"code": row[0], "label": row[1]}
+    return out
+
+
 async def update_price_grid_cell(
     session: AsyncSession,
     tenant_id: UUID,
@@ -849,6 +914,9 @@ async def get_own_cross_ka(
             }
 
     # 3. Compute min/max/spread per product
+    distinct_labels = {data["canonical_name"] for data in by_norm.values()
+                       if data.get("canonical_name")}
+    cat_by_label = await _resolve_label_categories(session, tenant_id, distinct_labels)
     products = []
     for data in by_norm.values():
         prices_only = [
@@ -862,12 +930,15 @@ async def get_own_cross_ka(
         else:
             mn = mx = 0
             spread = 0
+        cat = cat_by_label.get(data["canonical_name"])
         products.append({
             "canonical_name": data["canonical_name"],
             "prices": data["prices"],
             "min_price": round(mn, 2),
             "max_price": round(mx, 2),
             "spread_pct": round(spread, 2),
+            "category_code": cat["code"] if cat else None,
+            "category_label": cat["label"] if cat else None,
         })
 
     # Sort: descending by spread (most interesting first), then by canonical_name

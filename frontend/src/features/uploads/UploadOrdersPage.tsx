@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent } from "react";
 
-import { ApiError, getToken } from "../../shared/api";
+import { ApiError, getActiveOrgId, getToken } from "../../shared/api";
 
 /**
  * Upload comenzi open (ADP radComenzi sau Sika comenzi).
@@ -64,6 +64,8 @@ function uploadWithProgress(
     xhr.open("POST", url);
     const token = getToken();
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    const activeOrg = getActiveOrgId();
+    if (activeOrg) xhr.setRequestHeader("X-Active-Org-Id", activeOrg);
     xhr.responseType = "json";
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {
@@ -97,8 +99,12 @@ function uploadWithProgress(
 
 async function fetchJob(jobId: string): Promise<OrdersJobStatus> {
   const token = getToken();
+  const activeOrg = getActiveOrgId();
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (activeOrg) headers["X-Active-Org-Id"] = activeOrg;
   const res = await fetch(`${apiBase()}/api/orders/import/jobs/${jobId}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers,
   });
   if (!res.ok) throw new ApiError(res.status, `Job query failed (${res.status})`);
   const raw = (await res.json()) as Record<string, unknown>;

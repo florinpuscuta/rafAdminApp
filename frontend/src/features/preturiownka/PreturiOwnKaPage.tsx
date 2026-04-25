@@ -10,7 +10,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ApiError, apiFetch } from "../../shared/api";
 import { CollapsibleBlock } from "../../shared/ui/CollapsibleBlock";
 import { useCompanyScope } from "../../shared/ui/CompanyScopeProvider";
-import { epsSubgroup, groupByEpsSubgroup } from "../../shared/utils/epsSubgroup";
 import { downloadTableAsCsv } from "../../shared/utils/exportCsv";
 import { groupBySikaTm } from "../../shared/utils/sikaTm";
 
@@ -27,6 +26,8 @@ interface ProductRow {
   min_price: number;
   max_price: number;
   spread_pct: number;
+  category_code?: string | null;
+  category_label?: string | null;
 }
 
 interface CrossKaResponse {
@@ -72,7 +73,8 @@ export default function PreturiOwnKaPage() {
     return data.products.filter((p) => p.canonical_name.toUpperCase().includes(q));
   }, [data, search]);
 
-  // La Adeplast: EPS products (nume „EPS NN") → grupe pe subgrupe; restul → „Alte".
+  // La Adeplast: grupare pe categorie din DB (category_code/label din backend);
+  // produsele fara categorie aterizeaza in "Necategorizate".
   // La Sika: grupare pe TM (Building Finishing / Sealing & Bonding / ...).
   const sections = useMemo(() => {
     if (isSika) {
@@ -83,19 +85,25 @@ export default function PreturiOwnKaPage() {
       );
       return { mode: "sika" as const, tmGroups };
     }
-    const eps: ProductRow[] = [];
-    const rest: ProductRow[] = [];
+    const byCategory = new Map<string, { code: string; label: string; products: ProductRow[] }>();
+    const uncategorized: ProductRow[] = [];
     for (const p of filtered) {
-      const sub = epsSubgroup(p.canonical_name);
-      if (sub.key !== "other") eps.push(p);
-      else rest.push(p);
+      if (p.category_code && p.category_label) {
+        const key = p.category_code;
+        let bucket = byCategory.get(key);
+        if (!bucket) {
+          bucket = { code: p.category_code, label: p.category_label, products: [] };
+          byCategory.set(key, bucket);
+        }
+        bucket.products.push(p);
+      } else {
+        uncategorized.push(p);
+      }
     }
-    const epsGroups = groupByEpsSubgroup(
-      eps,
-      (p) => p.canonical_name,
-      (p) => (Number.isFinite(p.min_price) ? p.min_price : 0),
+    const catGroups = Array.from(byCategory.values()).sort(
+      (a, b) => a.label.localeCompare(b.label, "ro"),
     );
-    return { mode: "adp" as const, epsGroups, rest };
+    return { mode: "adp" as const, catGroups, uncategorized };
   }, [filtered, isSika]);
 
   if (loading) return <div style={{ padding: 20, color: "var(--muted)" }}>Se încarcă…</div>;
@@ -161,35 +169,27 @@ export default function PreturiOwnKaPage() {
         </>
       ) : (
         <>
-          {sections.epsGroups.length > 0 && (
-            <div style={{ marginBottom: 16 }}>
-              <CollapsibleBlock title="EPS" subtitle={`${sections.epsGroups.reduce((s, g) => s + g.products.length, 0)} produse`}>
-                {sections.epsGroups.map((g, gi) => (
-                  <div key={g.key} style={{ marginBottom: 10 }}>
-                    <CollapsibleBlock
-                      title={g.label}
-                      subtitle={`(${g.products.length} produse)`}
-                      level={1}
-                    >
-                      <ProductTable
-                        tableRef={gi === 0 ? tableRef : undefined}
-                        stores={data.stores}
-                        products={g.products}
-                      />
-                    </CollapsibleBlock>
-                  </div>
-                ))}
+          {sections.catGroups.map((g, gi) => (
+            <div key={g.code} style={{ marginBottom: 14 }}>
+              <CollapsibleBlock title={g.label} subtitle={`(${g.products.length} produse)`}>
+                <ProductTable
+                  tableRef={gi === 0 ? tableRef : undefined}
+                  stores={data.stores}
+                  products={g.products}
+                />
               </CollapsibleBlock>
             </div>
-          )}
-
-          {sections.rest.length > 0 && (
+          ))}
+          {sections.uncategorized.length > 0 && (
             <div>
-              <CollapsibleBlock title="Alte produse" subtitle={`(${sections.rest.length} produse)`}>
+              <CollapsibleBlock
+                title="Necategorizate"
+                subtitle={`(${sections.uncategorized.length} produse)`}
+              >
                 <ProductTable
-                  tableRef={sections.epsGroups.length === 0 ? tableRef : undefined}
+                  tableRef={sections.catGroups.length === 0 ? tableRef : undefined}
                   stores={data.stores}
-                  products={sections.rest}
+                  products={sections.uncategorized}
                 />
               </CollapsibleBlock>
             </div>

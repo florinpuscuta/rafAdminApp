@@ -15,10 +15,15 @@ from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, UploadFile, status
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.api import APIRouter
-from app.modules.auth.deps import get_current_user
+from app.core.db import get_session
+from app.modules.auth.deps import get_current_tenant_id, get_current_user
 from app.modules.orders import import_service as orders_import_service
 from app.modules.orders import jobs as orders_jobs
+from app.modules.tenants.models import Organization
 from app.modules.orders.schemas import (
     OrdersImportJobAccepted,
     OrdersImportJobStatus,
@@ -39,6 +44,8 @@ async def import_orders_async(
         description="Data snapshot-ului (YYYY-MM-DD). Default: azi.",
     ),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
 ):
     filename = file.filename or ""
     if not filename.lower().endswith(".xlsx"):
@@ -51,6 +58,23 @@ async def import_orders_async(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_source", "message": "source trebuie 'adp' sau 'sika'"},
+        )
+
+    # Guard: source-ul trebuie sa corespunda org-ului activ.
+    org_slug = (await session.execute(
+        select(Organization.slug).where(Organization.id == tenant_id)
+    )).scalar_one_or_none()
+    expected_slug = "adeplast" if src == "adp" else "sika"
+    if org_slug and org_slug != expected_slug:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "wrong_org",
+                "message": (
+                    f"Source '{src}' nu poate fi încărcat în organizația '{org_slug}'. "
+                    f"Comută pe organizația '{expected_slug}' și reîncarcă."
+                ),
+            },
         )
 
     if report_date:
@@ -74,7 +98,7 @@ async def import_orders_async(
             detail={"code": "empty_file", "message": "Fișier gol"},
         )
 
-    existing = orders_jobs.has_active_job(current_user.tenant_id)
+    existing = orders_jobs.has_active_job(tenant_id)
     if existing is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -85,11 +109,11 @@ async def import_orders_async(
             },
         )
 
-    job = await orders_jobs.create_job(tenant_id=current_user.tenant_id)
+    job = await orders_jobs.create_job(tenant_id=tenant_id)
     asyncio.create_task(
         orders_import_service.run_import_job(
             job_id=job.id,
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             user_id=current_user.id,
             content=content,
             filename=filename,
@@ -104,9 +128,10 @@ async def import_orders_async(
 async def get_orders_import_job(
     job_id: UUID,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
 ):
     job = orders_jobs.get_job(job_id)
-    if job is None or job.tenant_id != current_user.tenant_id:
+    if job is None or job.tenant_id != tenant_id:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "job_not_found", "message": "Job inexistent"},

@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
@@ -8,6 +9,7 @@ from app.core.db import get_session
 from app.modules.audit import service as audit_service
 from app.modules.auth.deps import get_current_tenant_id, get_current_user
 from app.modules.pret_productie import service as svc
+from app.modules.tenants.models import Organization
 from app.modules.pret_productie.schemas import (
     PPListResponse,
     PPMonthlyListResponse,
@@ -36,6 +38,26 @@ def _validate_scope(scope: str) -> str:
             },
         )
     return s
+
+
+async def _guard_scope_matches_org(
+    session: AsyncSession, tenant_id: UUID, scope: str,
+) -> None:
+    org_slug = (await session.execute(
+        select(Organization.slug).where(Organization.id == tenant_id)
+    )).scalar_one_or_none()
+    expected_slug = "adeplast" if scope == "adp" else "sika"
+    if org_slug and org_slug != expected_slug:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "wrong_org",
+                "message": (
+                    f"Scope '{scope}' nu poate fi încărcat în organizația '{org_slug}'. "
+                    f"Comută pe organizația '{expected_slug}' și reîncarcă."
+                ),
+            },
+        )
 
 
 @router.get("/summary", response_model=PPSummaryResponse)
@@ -69,9 +91,11 @@ async def upload(
     file: UploadFile,
     scope: str = Query("adp"),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> PPUploadResponse:
     s = _validate_scope(scope)
+    await _guard_scope_matches_org(session, tenant_id, s)
     filename = file.filename or ""
     if not filename.lower().endswith(".xlsx"):
         raise HTTPException(
@@ -95,7 +119,7 @@ async def upload(
 
     inserted, deleted_before, unmatched = await svc.upsert_prices(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         scope=s,
         parsed_rows=parsed.rows,
         filename=filename,
@@ -104,10 +128,10 @@ async def upload(
     await audit_service.log_event(
         session,
         event_type="pret_productie.uploaded",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="pret_productie",
-        target_id=current_user.tenant_id,
+        target_id=tenant_id,
         metadata={
             "scope": s,
             "filename": filename,
@@ -136,17 +160,18 @@ async def upload(
 async def reset(
     scope: str = Query("adp"),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     s = _validate_scope(scope)
-    deleted = await svc.reset_scope(session, current_user.tenant_id, s)
+    deleted = await svc.reset_scope(session, tenant_id, s)
     await audit_service.log_event(
         session,
         event_type="pret_productie.reset",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="pret_productie",
-        target_id=current_user.tenant_id,
+        target_id=tenant_id,
         metadata={"scope": s, "deleted": deleted},
     )
     return None
@@ -204,10 +229,12 @@ async def upload_monthly(
     year: int = Query(...),
     month: int = Query(...),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> PPMonthlyUploadResponse:
     s = _validate_scope(scope)
     _validate_year_month(year, month)
+    await _guard_scope_matches_org(session, tenant_id, s)
     filename = file.filename or ""
     if not filename.lower().endswith(".xlsx"):
         raise HTTPException(
@@ -230,7 +257,7 @@ async def upload_monthly(
 
     inserted, deleted_before, unmatched = await svc.upsert_prices_monthly(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         scope=s, year=year, month=month,
         parsed_rows=parsed.rows,
         filename=filename,
@@ -239,10 +266,10 @@ async def upload_monthly(
     await audit_service.log_event(
         session,
         event_type="pret_productie.monthly_uploaded",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="pret_productie_monthly",
-        target_id=current_user.tenant_id,
+        target_id=tenant_id,
         metadata={
             "scope": s, "year": year, "month": month,
             "filename": filename,
@@ -273,20 +300,21 @@ async def reset_monthly(
     year: int = Query(...),
     month: int = Query(...),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     s = _validate_scope(scope)
     _validate_year_month(year, month)
     deleted = await svc.reset_scope_monthly(
-        session, current_user.tenant_id, s, year, month,
+        session, tenant_id, s, year, month,
     )
     await audit_service.log_event(
         session,
         event_type="pret_productie.monthly_reset",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="pret_productie_monthly",
-        target_id=current_user.tenant_id,
+        target_id=tenant_id,
         metadata={"scope": s, "year": year, "month": month, "deleted": deleted},
     )
     return None

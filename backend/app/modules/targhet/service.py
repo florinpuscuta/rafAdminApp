@@ -384,6 +384,87 @@ async def get_for_sika(
     )
 
 
+async def get_for_sikadp_merged(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    *,
+    year_curr: int,
+) -> dict[str, Any]:
+    """Targhet SIKADP consolidat cross-org pe `agent_name`.
+
+    Vânzări (prev/curr) per (agent_name, lună) = sumă cross-org.
+    pct_by_month: din primul org (după sync via PUT pe toate orguri,
+    valorile coincid).
+    """
+    parts: list[dict[str, Any]] = []
+    for tid in org_ids:
+        parts.append(await get_for_sikadp(session, tid, year_curr=year_curr))
+    if len(parts) == 1:
+        return parts[0]
+
+    by_name: dict[str, AgentTarget] = {}
+    for part in parts:
+        for ag in part["agents"]:
+            existing = by_name.get(ag.agent_name)
+            if existing is None:
+                new_ag = AgentTarget(
+                    agent_id=ag.agent_id, agent_name=ag.agent_name,
+                )
+                for m in range(1, 13):
+                    src_cell = ag.cell(m)
+                    dst = new_ag.cell(m)
+                    dst.prev_sales = src_cell.prev_sales
+                    dst.curr_sales = src_cell.curr_sales
+                    dst.target_pct = src_cell.target_pct
+                by_name[ag.agent_name] = new_ag
+            else:
+                for m in range(1, 13):
+                    src_cell = ag.cell(m)
+                    dst = existing.cell(m)
+                    dst.prev_sales += src_cell.prev_sales
+                    dst.curr_sales += src_cell.curr_sales
+
+    last_update = None
+    for p in parts:
+        lu = p.get("last_update")
+        if lu is not None and (last_update is None or lu > last_update):
+            last_update = lu
+
+    pct_by_month = parts[0]["pct_by_month"]
+
+    def _sort_key(a: AgentTarget) -> tuple[int, Decimal]:
+        is_unassigned = 1 if a.agent_id is None else 0
+        return (is_unassigned, -a.totals().curr_sales)
+
+    agents = sorted(by_name.values(), key=_sort_key)
+    return {
+        "scope": "sikadp",
+        "year_curr": year_curr,
+        "year_prev": year_curr - 1,
+        "pct_by_month": pct_by_month,
+        "last_update": last_update,
+        "agents": agents,
+    }
+
+
+async def upsert_growth_pct_multi(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    *,
+    year: int,
+    items: list[tuple[int, Decimal]],
+) -> dict[int, Decimal]:
+    """Scrie growth_pct in TOATE org_ids; util pentru SIKADP unde valoarea
+    trebuie sa fie identica in toate orgurile (zona-agent foloseste pct
+    per-tenant la calculul targetului)."""
+    last_map: dict[int, Decimal] = {}
+    for tid in org_ids:
+        last_map = await upsert_growth_pct(
+            session, tenant_id=tid, year=year, items=items,
+        )
+    return last_map
+
+
 async def get_for_sikadp(
     session: AsyncSession, tenant_id: UUID, *, year_curr: int,
 ) -> dict[str, Any]:

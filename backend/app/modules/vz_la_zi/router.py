@@ -182,9 +182,6 @@ def _merge_agents(parts_agents: list[list[svc.AgentRow]]) -> list[svc.AgentRow]:
                     eg.curr_sales += sr.curr_sales
                     eg.nelivrate += sr.nelivrate
                     eg.nefacturate += sr.nefacturate
-                    eg.orders_total += sr.orders_total
-                    eg.exercitiu += sr.exercitiu
-            existing.stores_count = len(existing.stores)
     return sorted(by_name.values(), key=lambda a: a.totals()["curr_sales"], reverse=True)
 
 

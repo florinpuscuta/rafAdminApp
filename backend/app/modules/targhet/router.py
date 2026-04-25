@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids, get_current_tenant_id
 from app.modules.targhet import service as svc
 from app.modules.targhet.schemas import (
     TgtAgentRow,
@@ -131,6 +131,7 @@ async def get_targhet(
                     "targhetul întotdeauna returnează cele 12 luni.",
     ),
     tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = scope.lower()
@@ -149,7 +150,9 @@ async def get_targhet(
     elif scope == "sika":
         data = await svc.get_for_sika(session, tenant_id, year_curr=year_curr)
     else:
-        data = await svc.get_for_sikadp(session, tenant_id, year_curr=year_curr)
+        data = await svc.get_for_sikadp_merged(
+            session, org_ids, year_curr=year_curr,
+        )
 
     return _build_response(scope, data)
 
@@ -170,12 +173,14 @@ async def get_growth_pct(
 @router.put("/growth-pct", response_model=TgtGrowthList)
 async def put_growth_pct(
     payload: TgtGrowthUpsert,
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
+    """Pe SIKADP propagă pct la toate org_ids ca să fie sincronizate
+    (zona-agent calculează target per-tenant cu pct-ul propriu)."""
     items = [(it.month, it.pct) for it in payload.items]
-    m = await svc.upsert_growth_pct(
-        session, tenant_id=tenant_id, year=payload.year, items=items,
+    m = await svc.upsert_growth_pct_multi(
+        session, org_ids, year=payload.year, items=items,
     )
     await session.commit()
     return TgtGrowthList(

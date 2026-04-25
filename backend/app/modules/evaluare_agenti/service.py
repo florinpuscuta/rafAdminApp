@@ -53,6 +53,48 @@ async def list_compensation(
     return [(row.Agent, row.AgentCompensation) for row in res.all()]
 
 
+async def upsert_compensation_multi(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    primary_tenant_id: UUID,
+    *,
+    agent_id: UUID,
+    salariu_fix: Decimal,
+    bonus_vanzari_eligibil: bool,
+    note: str | None,
+) -> AgentCompensation | None:
+    """Pe SIKADP scrie compensation in TOATE org_ids matching agent_name —
+    aceeasi persoana → aceeasi comp peste tot."""
+    if len(org_ids) <= 1:
+        single = org_ids[0] if org_ids else primary_tenant_id
+        return await upsert_compensation(
+            session, tenant_id=single, agent_id=agent_id,
+            salariu_fix=salariu_fix,
+            bonus_vanzari_eligibil=bonus_vanzari_eligibil, note=note,
+        )
+    primary_agent = (await session.execute(
+        select(Agent).where(Agent.id == agent_id)
+    )).scalar_one_or_none()
+    if primary_agent is None:
+        return None
+    name = primary_agent.full_name
+    last: AgentCompensation | None = None
+    for tid in org_ids:
+        ag = (await session.execute(
+            select(Agent).where(
+                Agent.tenant_id == tid, Agent.full_name == name,
+            )
+        )).scalar_one_or_none()
+        if ag is None:
+            continue
+        last = await upsert_compensation(
+            session, tenant_id=tid, agent_id=ag.id,
+            salariu_fix=salariu_fix,
+            bonus_vanzari_eligibil=bonus_vanzari_eligibil, note=note,
+        )
+    return last
+
+
 async def upsert_compensation(
     session: AsyncSession,
     *,
@@ -470,6 +512,76 @@ async def list_month_inputs(
             "total_cost": total,
             "note": mi.note if mi else None,
         })
+    out.sort(key=lambda r: (-r["vanzari"], r["agent_name"].lower()))
+    return out
+
+
+async def list_month_inputs_merged(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    primary_tenant_id: UUID,
+    *,
+    year: int,
+    month: int,
+) -> list[dict]:
+    """Consolidat SIKADP: agreghează cross-org pe `agent_name`.
+
+    - Vânzări + costuri editabile (merch / auto / alte) = sumă cross-org
+    - Sal. fix / Bonus / Bonus raion = luate din `primary_tenant_id` (un singur ins)
+    - Total = recalculat din valorile merged
+    - `agent_id` returnat aparține de `primary_tenant_id` ca să meargă PUT-ul
+    """
+    parts_with_tid = [
+        (tid, await list_month_inputs(session, tid, year=year, month=month))
+        for tid in org_ids
+    ]
+    if len(parts_with_tid) == 1:
+        return parts_with_tid[0][1]
+
+    primary_rows = next(
+        (rows for tid, rows in parts_with_tid if tid == primary_tenant_id),
+        parts_with_tid[0][1],
+    )
+    primary_by_name = {r["agent_name"]: r for r in primary_rows}
+
+    by_name: dict[str, dict] = {}
+    for _tid, rows in parts_with_tid:
+        for r in rows:
+            name = r["agent_name"]
+            if name not in by_name:
+                primary = primary_by_name.get(name)
+                base = primary if primary else r
+                by_name[name] = {
+                    "agent_id": base["agent_id"],
+                    "agent_name": name,
+                    "vanzari": Decimal("0"),
+                    "salariu_fix": base["salariu_fix"],
+                    "bonus_agent": base["bonus_agent"],
+                    "bonus_raion": base["bonus_raion"],
+                    "merchandiser_zona": Decimal("0"),
+                    "cheltuieli_auto": Decimal("0"),
+                    "alte_cheltuieli": Decimal("0"),
+                    "alte_cheltuieli_label": None,
+                    "total_cost": Decimal("0"),
+                    "note": None,
+                }
+            entry = by_name[name]
+            entry["vanzari"] += r["vanzari"]
+            entry["merchandiser_zona"] += r["merchandiser_zona"]
+            entry["cheltuieli_auto"] += r["cheltuieli_auto"]
+            entry["alte_cheltuieli"] += r["alte_cheltuieli"]
+            if not entry["alte_cheltuieli_label"] and r.get("alte_cheltuieli_label"):
+                entry["alte_cheltuieli_label"] = r["alte_cheltuieli_label"]
+            if not entry["note"] and r.get("note"):
+                entry["note"] = r["note"]
+
+    for entry in by_name.values():
+        entry["total_cost"] = (
+            entry["salariu_fix"] + entry["bonus_agent"] + entry["bonus_raion"]
+            + entry["merchandiser_zona"] + entry["cheltuieli_auto"] + entry["alte_cheltuieli"]
+        )
+
+    out = list(by_name.values())
     out.sort(key=lambda r: (-r["vanzari"], r["agent_name"].lower()))
     return out
 
@@ -1100,6 +1212,355 @@ async def build_agent_annual_breakdown(
         "agent_name": agent.full_name,
         "year": year,
         "rows": rows,
+    }
+
+
+async def list_zona_agents_summary_merged(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    *,
+    year: int,
+    month: int,
+) -> list[dict]:
+    """Consolidat cross-org pe agent_name:
+      - total_target / total_realizat / total_bonus = sumă cross-org
+      - store_count = UNION by store_name (nu se dublează aceleași magazine
+        din orguri diferite — Dedeman e Dedeman indiferent de org)
+    """
+    parts = [
+        await list_zona_agents_summary(session, tid, year=year, month=month)
+        for tid in org_ids
+    ]
+    if len(parts) == 1:
+        return parts[0]
+
+    # Pentru a deduplica magazinele cross-org: incarcam mapping
+    # (tenant, agent_id) → set[store_name] folosind _agent_zone_stores +
+    # store_name lookup per tenant.
+    from app.modules.stores.models import Store
+    from app.modules.agents.models import Agent as _Agent
+
+    agent_stores_by_name: dict[str, set[str]] = {}
+    for tid in org_ids:
+        zone = await _agent_zone_stores(session, tid, year=year, month=month)
+        if not zone:
+            continue
+        all_store_ids: set[UUID] = set()
+        for sids in zone.values():
+            all_store_ids.update(sids)
+        store_names: dict[UUID, str] = {}
+        if all_store_ids:
+            store_names = {
+                row.id: row.name
+                for row in (await session.execute(
+                    select(Store.id, Store.name).where(Store.id.in_(all_store_ids))
+                )).all()
+            }
+        agent_names: dict[UUID, str] = {
+            row.id: row.full_name
+            for row in (await session.execute(
+                select(_Agent.id, _Agent.full_name)
+                .where(_Agent.tenant_id == tid, _Agent.id.in_(zone.keys()))
+            )).all()
+        }
+        for aid, sids in zone.items():
+            ag_name = agent_names.get(aid)
+            if not ag_name:
+                continue
+            bucket = agent_stores_by_name.setdefault(ag_name, set())
+            for sid in sids:
+                sname = store_names.get(sid)
+                if sname:
+                    bucket.add(sname)
+
+    by_name: dict[str, dict] = {}
+    for rows in parts:
+        for r in rows:
+            name = r["agent_name"]
+            existing = by_name.get(name)
+            if existing is None:
+                by_name[name] = dict(r)
+                continue
+            for fld in ("total_target", "total_realizat", "total_bonus"):
+                existing[fld] = Decimal(existing.get(fld, 0)) + Decimal(r.get(fld, 0))
+
+    # Override store_count cu uniunea cross-org de nume.
+    for entry in by_name.values():
+        names = agent_stores_by_name.get(entry["agent_name"])
+        if names:
+            entry["store_count"] = len(names)
+
+    out = list(by_name.values())
+    out.sort(key=lambda r: r["agent_name"].lower())
+    return out
+
+
+async def get_zona_agent_detail_merged(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    primary_tenant_id: UUID,
+    *,
+    agent_id: UUID,
+    year: int,
+    month: int,
+) -> dict | None:
+    """Detail consolidat pentru un agent — uniune stores by name cross-org."""
+    if len(org_ids) <= 1:
+        single = org_ids[0] if org_ids else primary_tenant_id
+        return await get_zona_agent_detail(
+            session, single, agent_id=agent_id, year=year, month=month,
+        )
+    primary_agent = (await session.execute(
+        select(Agent).where(Agent.id == agent_id)
+    )).scalar_one_or_none()
+    if primary_agent is None:
+        return None
+    agent_name = primary_agent.full_name
+    parts: list[dict] = []
+    for tid in org_ids:
+        ag = (await session.execute(
+            select(Agent).where(
+                Agent.tenant_id == tid, Agent.full_name == agent_name,
+            )
+        )).scalar_one_or_none()
+        if ag is None:
+            continue
+        d = await get_zona_agent_detail(
+            session, tid, agent_id=ag.id, year=year, month=month,
+        )
+        if d is not None:
+            parts.append(d)
+    if not parts:
+        return None
+    base = next((p for p in parts if p), parts[0])
+    stores_by_name: dict[str, dict] = {}
+    for p in parts:
+        for s in p.get("stores", []):
+            sname = s["store_name"]
+            existing = stores_by_name.get(sname)
+            if existing is None:
+                stores_by_name[sname] = dict(s)
+            else:
+                for fld in ("target", "realizat", "bonus"):
+                    existing[fld] = Decimal(existing.get(fld, 0)) + Decimal(s.get(fld, 0))
+                pct: Decimal | None = None
+                if Decimal(existing["target"]) > 0:
+                    pct = (Decimal(existing["realizat"]) / Decimal(existing["target"])
+                           * Decimal("100")).quantize(Decimal("0.01"))
+                existing["achievement_pct"] = pct
+    stores = sorted(stores_by_name.values(), key=lambda x: x["store_name"].lower())
+    total_target = sum((Decimal(s.get("target", 0)) for s in stores), Decimal("0"))
+    total_realizat = sum((Decimal(s.get("realizat", 0)) for s in stores), Decimal("0"))
+    total_bonus = sum((Decimal(s.get("bonus", 0)) for s in stores), Decimal("0"))
+    return {
+        "agent_id": base["agent_id"],
+        "agent_name": agent_name,
+        "year": year,
+        "month": month,
+        "stores": stores,
+        "total_target": total_target,
+        "total_realizat": total_realizat,
+        "total_bonus": total_bonus,
+    }
+
+
+def _merge_annual_rows(parts: list[list[dict]]) -> list[dict]:
+    """Merge cross-org pe agent_name pentru rapoarte anuale (12-month arrays).
+
+    - monthly[m] = sum cross-org
+    - total = sum cross-org
+    - agent_id = primul intalnit (din primary daca e listat primul)
+    """
+    if len(parts) == 1:
+        return parts[0]
+    by_name: dict[str, dict] = {}
+    for rows in parts:
+        for r in rows:
+            name = r["agent_name"]
+            existing = by_name.get(name)
+            if existing is None:
+                by_name[name] = {
+                    "agent_id": r["agent_id"],
+                    "agent_name": name,
+                    "monthly": [Decimal(v) for v in r["monthly"]],
+                    "total": Decimal(r["total"]),
+                }
+            else:
+                for i, v in enumerate(r["monthly"]):
+                    existing["monthly"][i] = existing["monthly"][i] + Decimal(v)
+                existing["total"] = existing["total"] + Decimal(r["total"])
+    out = list(by_name.values())
+    out.sort(key=lambda r: (-r["total"], r["agent_name"].lower()))
+    return out
+
+
+async def build_annual_costs_merged(
+    session: AsyncSession, org_ids: list[UUID], *, year: int,
+) -> list[dict]:
+    parts = [await build_annual_costs(session, tid, year=year) for tid in org_ids]
+    return _merge_annual_rows(parts)
+
+
+async def build_salariu_bonus_annual_merged(
+    session: AsyncSession, org_ids: list[UUID], *, year: int,
+) -> list[dict]:
+    parts = [
+        await build_salariu_bonus_annual(session, tid, year=year)
+        for tid in org_ids
+    ]
+    return _merge_annual_rows(parts)
+
+
+async def build_bonus_magazin_annual_merged(
+    session: AsyncSession, org_ids: list[UUID], *, year: int,
+) -> list[dict]:
+    parts = [
+        await build_bonus_magazin_annual(session, tid, year=year)
+        for tid in org_ids
+    ]
+    return _merge_annual_rows(parts)
+
+
+async def build_dashboard_merged(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    *,
+    year: int,
+    months: list[int] | None = None,
+) -> list[dict]:
+    """Dashboard agenti consolidat: sum scalare cross-org, recalc % si YoY."""
+    parts = [
+        await build_dashboard(session, tid, year=year, months=months)
+        for tid in org_ids
+    ]
+    if len(parts) == 1:
+        return parts[0]
+    by_name: dict[str, dict] = {}
+    for rows in parts:
+        for r in rows:
+            name = r["agent_name"]
+            existing = by_name.get(name)
+            if existing is None:
+                by_name[name] = dict(r)
+                continue
+            existing["store_count"] = max(existing["store_count"], r["store_count"])
+            for fld in ("vanzari", "vanzari_prev", "cheltuieli", "bonus_agent"):
+                existing[fld] = Decimal(existing.get(fld, 0) or 0) + Decimal(r.get(fld, 0) or 0)
+    # Recalculate derived metrics.
+    for entry in by_name.values():
+        v = Decimal(entry.get("vanzari", 0) or 0)
+        c = Decimal(entry.get("cheltuieli", 0) or 0)
+        vp = Decimal(entry.get("vanzari_prev", 0) or 0)
+        entry["cost_pct"] = (
+            (c / v * Decimal("100")).quantize(Decimal("0.01")) if v > 0 else None
+        )
+        entry["cost_per_100k"] = (
+            (c / v * Decimal("100000")).quantize(Decimal("0.01")) if v > 0 else None
+        )
+        entry["yoy_pct"] = (
+            ((v - vp) / vp * Decimal("100")).quantize(Decimal("0.01")) if vp > 0 else None
+        )
+    out = list(by_name.values())
+    out.sort(key=lambda r: (-Decimal(r.get("vanzari", 0) or 0), r["agent_name"].lower()))
+    return out
+
+
+async def build_agent_annual_breakdown_merged(
+    session: AsyncSession,
+    org_ids: list[UUID],
+    primary_tenant_id: UUID,
+    *,
+    agent_id: UUID,
+    year: int,
+) -> dict | None:
+    """Consolidat SIKADP: cross-org pentru un agent (matchuit pe `agent_name`).
+
+    - Sal. fix / Bonus agent / Bonus raion: din `primary_tenant_id`
+    - Merchandiser/Auto/Alte: sum cross-org (input-uri din ambele orguri)
+    - Total/lună: recalculat
+    """
+    # Daca un singur org (legacy/fallback), apel direct.
+    if len(org_ids) <= 1:
+        single_tid = org_ids[0] if org_ids else primary_tenant_id
+        return await build_agent_annual_breakdown(
+            session, single_tid, agent_id=agent_id, year=year,
+        )
+
+    # Resolve agent_name din primary org (sau din org-ul unde exista agent_id-ul).
+    primary_agent = (await session.execute(
+        select(Agent).where(Agent.id == agent_id)
+    )).scalar_one_or_none()
+    if primary_agent is None:
+        return None
+    agent_name = primary_agent.full_name
+
+    # Pentru fiecare org, gaseste agent_id-ul corespondent prin nume si ruleaza
+    # breakdown-ul. Apoi merge la nivel de luna.
+    base_data: dict | None = None
+    parts: list[dict] = []
+    for tid in org_ids:
+        ag_in_org = (await session.execute(
+            select(Agent).where(
+                Agent.tenant_id == tid,
+                Agent.full_name == agent_name,
+            )
+        )).scalar_one_or_none()
+        if ag_in_org is None:
+            continue
+        data = await build_agent_annual_breakdown(
+            session, tid, agent_id=ag_in_org.id, year=year,
+        )
+        if data is None:
+            continue
+        parts.append(data)
+        if tid == primary_tenant_id:
+            base_data = data
+
+    if not parts:
+        return None
+    if base_data is None:
+        base_data = parts[0]
+
+    # Index per (data_idx, month) → row, ca sa putem aduna.
+    primary_rows = {r["month"]: r for r in base_data["rows"]}
+    merged_rows: list[dict] = []
+    for m in range(1, 13):
+        primary = primary_rows.get(m)
+        merch = sum(
+            (next((r["merchandiser_zona"] for r in p["rows"] if r["month"] == m), Decimal("0"))
+             for p in parts),
+            Decimal("0"),
+        )
+        auto = sum(
+            (next((r["cheltuieli_auto"] for r in p["rows"] if r["month"] == m), Decimal("0"))
+             for p in parts),
+            Decimal("0"),
+        )
+        alte = sum(
+            (next((r["alte_cheltuieli"] for r in p["rows"] if r["month"] == m), Decimal("0"))
+             for p in parts),
+            Decimal("0"),
+        )
+        salariu_fix = primary["salariu_fix"] if primary else Decimal("0")
+        bon = primary["bonus_agent"] if primary else Decimal("0")
+        ra = primary["bonus_raion"] if primary else Decimal("0")
+        total = salariu_fix + bon + merch + auto + alte + ra
+        merged_rows.append({
+            "month": m,
+            "salariu_fix": salariu_fix,
+            "bonus_agent": bon,
+            "merchandiser_zona": merch,
+            "cheltuieli_auto": auto,
+            "alte_cheltuieli": alte,
+            "bonus_raion": ra,
+            "total": total,
+        })
+
+    return {
+        "agent_id": base_data["agent_id"],
+        "agent_name": agent_name,
+        "year": year,
+        "rows": merged_rows,
     }
 
 

@@ -642,8 +642,16 @@ const FULL_CONSOLIDATED_PATHS = [
   "/analiza/zi",
   "/analiza/top-magazine",
   "/topprod/",
+  "/evaluare/input-lunar",
+  "/evaluare/agent-anual",
+  "/evaluare/cost-anual",
+  "/evaluare/dashboard",
+  "/evaluare/podium",
+  "/evaluare/zona-agent",
+  "/evaluare/sal-fix",
+  "/targhet",
 ];
-const FULL_CONSOLIDATED_EXACT = ["/"];
+const FULL_CONSOLIDATED_EXACT = ["/", "/evaluare"];
 
 function SikadpBanner({ pathname }: { pathname: string }) {
   const fullSupport =
@@ -703,7 +711,7 @@ function CompanySwitcher({
     <div style={styles.switcherRow}>
       {btns.map((b) => {
         const isActive =
-          b.value === "settings" ? inSettings : !inSettings && b.value === scope;
+          b.value === "settings" ? inSettings : b.value === scope;
         return (
           <button
             key={b.value}

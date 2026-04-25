@@ -6,7 +6,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids, get_current_tenant_id, get_current_user
+from app.modules.users.models import User
 from app.modules.evaluare_agenti import service as svc
 from app.modules.evaluare_agenti.schemas import (
     AgentAnnualMonthRow,
@@ -90,21 +91,28 @@ async def list_compensation(
 async def upsert_compensation(
     payload: AgentCompUpsert,
     tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    comp = await svc.upsert_compensation(
+    comp = await svc.upsert_compensation_multi(
         session,
-        tenant_id=tenant_id,
+        org_ids,
+        tenant_id,
         agent_id=payload.agent_id,
         salariu_fix=payload.salariu_fix,
         bonus_vanzari_eligibil=payload.bonus_vanzari_eligibil,
         note=payload.note,
     )
+    if comp is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail={"code": "agent_not_found", "message": "Agent inexistent"},
+        )
     await session.commit()
     from app.modules.agents import service as agents_service
     agent = await agents_service.get_agent(session, tenant_id, payload.agent_id)
     return AgentCompRow(
-        agent_id=comp.agent_id,
+        agent_id=payload.agent_id,
         agent_name=agent.full_name if agent else "",
         salariu_fix=comp.salariu_fix,
         bonus_vanzari_eligibil=comp.bonus_vanzari_eligibil,
@@ -119,12 +127,15 @@ async def upsert_compensation(
 async def list_month_inputs(
     year: int = Query(...),
     month: int = Query(...),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
     m = _validate_month(month)
-    rows_data = await svc.list_month_inputs(session, tenant_id, year=y, month=m)
+    rows_data = await svc.list_month_inputs_merged(
+        session, org_ids, current_user.tenant_id, year=y, month=m,
+    )
     return MonthInputList(
         year=y,
         month=m,
@@ -136,6 +147,8 @@ async def list_month_inputs(
 async def upsert_month_input(
     payload: MonthInputUpsert,
     tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(payload.year)
@@ -153,7 +166,9 @@ async def upsert_month_input(
         note=payload.note,
     )
     await session.commit()
-    rows_data = await svc.list_month_inputs(session, tenant_id, year=y, month=m)
+    rows_data = await svc.list_month_inputs_merged(
+        session, org_ids, current_user.tenant_id, year=y, month=m,
+    )
     match = next((r for r in rows_data if r["agent_id"] == payload.agent_id), None)
     if match is None:
         raise HTTPException(
@@ -259,12 +274,12 @@ async def delete_raion_bonus(
 async def list_zona_agents(
     year: int = Query(...),
     month: int = Query(...),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
     m = _validate_month(month)
-    rows = await svc.list_zona_agents_summary(session, tenant_id, year=y, month=m)
+    rows = await svc.list_zona_agents_summary_merged(session, org_ids, year=y, month=m)
     return ZonaAgentsResponse(
         year=y, month=m,
         agents=[ZonaAgentSummary(**r) for r in rows],
@@ -276,13 +291,14 @@ async def get_zona_agent(
     agent_id: UUID,
     year: int = Query(...),
     month: int = Query(...),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
     m = _validate_month(month)
-    detail = await svc.get_zona_agent_detail(
-        session, tenant_id, agent_id=agent_id, year=y, month=m,
+    detail = await svc.get_zona_agent_detail_merged(
+        session, org_ids, current_user.tenant_id, agent_id=agent_id, year=y, month=m,
     )
     if detail is None:
         raise HTTPException(
@@ -340,11 +356,11 @@ async def upsert_zona_bonus(
 @router.get("/cost-annual", response_model=AnnualCostResponse)
 async def get_cost_annual(
     year: int = Query(...),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
-    rows_data = await svc.build_annual_costs(session, tenant_id, year=y)
+    rows_data = await svc.build_annual_costs_merged(session, org_ids, year=y)
     rows = [AnnualCostRow(**r) for r in rows_data]
     month_totals = [Decimal("0")] * 12
     grand = Decimal("0")
@@ -363,12 +379,13 @@ async def get_cost_annual(
 async def get_agent_annual(
     agent_id: UUID = Query(...),
     year: int = Query(...),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
+    current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
-    data = await svc.build_agent_annual_breakdown(
-        session, tenant_id, agent_id=agent_id, year=y,
+    data = await svc.build_agent_annual_breakdown_merged(
+        session, org_ids, current_user.tenant_id, agent_id=agent_id, year=y,
     )
     if data is None:
         raise HTTPException(
@@ -401,7 +418,7 @@ async def get_agent_annual(
 async def get_dashboard(
     year: int = Query(...),
     months: list[int] | None = Query(None),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
@@ -415,7 +432,7 @@ async def get_dashboard(
                     detail={"code": "invalid_month", "message": "month trebuie între 1 și 12"},
                 )
             ms.append(m)
-    rows_data = await svc.build_dashboard(session, tenant_id, year=y, months=ms)
+    rows_data = await svc.build_dashboard_merged(session, org_ids, year=y, months=ms)
     rows = [DashboardAgentRow(**r) for r in rows_data]
     grand_v = sum((r.vanzari for r in rows), Decimal("0"))
     grand_c = sum((r.cheltuieli for r in rows), Decimal("0"))
@@ -439,11 +456,11 @@ async def get_dashboard(
 @router.get("/salariu-bonus-annual", response_model=SalariuBonusAnnualResponse)
 async def get_salariu_bonus_annual(
     year: int = Query(...),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
-    rows_data = await svc.build_salariu_bonus_annual(session, tenant_id, year=y)
+    rows_data = await svc.build_salariu_bonus_annual_merged(session, org_ids, year=y)
     rows = [SalariuBonusAnnualRow(**r) for r in rows_data]
     month_totals = [Decimal("0")] * 12
     grand = Decimal("0")
@@ -510,11 +527,11 @@ async def unassign_facturi_bonus(
 @router.get("/bonus-magazin-annual", response_model=BonusMagazinAnnualResponse)
 async def get_bonus_magazin_annual(
     year: int = Query(...),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     y = _validate_year(year)
-    rows_data = await svc.build_bonus_magazin_annual(session, tenant_id, year=y)
+    rows_data = await svc.build_bonus_magazin_annual_merged(session, org_ids, year=y)
     rows = [BonusMagazinAnnualRow(**r) for r in rows_data]
     month_totals = [Decimal("0")] * 12
     grand = Decimal("0")

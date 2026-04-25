@@ -67,13 +67,13 @@ async def delete_by_report_date(
     report_date: date,
 ) -> int:
     """
-    Șterge toate raw_orders din tenant pentru (source, report_date). Snapshot
-    cumulative: re-upload aceeași zi = replace; celelalte zile intacte.
+    Șterge TOATE raw_orders din tenant pentru source-ul dat (nu doar
+    report_date). Re-upload = full replace pe acel source.
+    `report_date` rămâne în signature pentru compat cu apelanții.
     """
     stmt = delete(RawOrder).where(
         RawOrder.tenant_id == tenant_id,
         RawOrder.source == source.lower(),
-        RawOrder.report_date == report_date,
     )
     result = await session.execute(stmt)
     return result.rowcount or 0

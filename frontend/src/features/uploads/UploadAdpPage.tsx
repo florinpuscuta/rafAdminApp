@@ -6,7 +6,7 @@ import type {
   ImportResponse,
   JobStage,
 } from "../sales/types";
-import { ApiError, getToken } from "../../shared/api";
+import { ApiError, getActiveOrgId, getToken } from "../../shared/api";
 
 /**
  * XHR-based upload care raportează progres pe transfer (fetch() nu suportă
@@ -23,6 +23,8 @@ function uploadWithProgress(
     xhr.open("POST", url);
     const token = getToken();
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    const activeOrg = getActiveOrgId();
+    if (activeOrg) xhr.setRequestHeader("X-Active-Org-Id", activeOrg);
     xhr.responseType = "json";
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) {

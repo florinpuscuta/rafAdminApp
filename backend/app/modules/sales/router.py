@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
@@ -71,6 +72,7 @@ async def import_sales(
                     "(an, lună) prezente în fișier, re-inserează.",
     ),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     filename = file.filename or ""
@@ -111,7 +113,7 @@ async def import_sales(
         try:
             result = await _normalize_alocare(
                 session,
-                tenant_id=current_user.tenant_id,
+                tenant_id=tenant_id,
                 user_id=current_user.id,
                 alocare_rows=alocare_rows,
             )
@@ -129,16 +131,16 @@ async def import_sales(
     pairs = sorted({(r["year"], r["month"]) for r in rows})
     if full_reload:
         deleted = await sales_service.delete_all_raw_sales(
-            session, current_user.tenant_id
+            session, tenant_id
         )
     else:
         deleted = await sales_service.delete_by_year_month_pairs(
-            session, current_user.tenant_id, pairs
+            session, tenant_id, pairs
         )
 
     batch = await sales_service.create_batch(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         uploaded_by_user_id=current_user.id,
         filename=filename,
     )
@@ -147,18 +149,18 @@ async def import_sales(
     unique_agents = list({r["agent"] for r in rows if r.get("agent")})
     unique_codes = list({r["product_code"] for r in rows if r.get("product_code")})
     client_to_store = await stores_service.resolve_map(
-        session, current_user.tenant_id, unique_clients
+        session, tenant_id, unique_clients
     )
     agent_to_canonical = await agents_service.resolve_map(
-        session, current_user.tenant_id, unique_agents
+        session, tenant_id, unique_agents
     )
     code_to_product = await products_service.resolve_map(
-        session, current_user.tenant_id, unique_codes
+        session, tenant_id, unique_codes
     )
 
     inserted = await sales_service.bulk_insert(
         session,
-        current_user.tenant_id,
+        tenant_id,
         batch.id,
         rows,
         client_to_store=client_to_store,
@@ -182,7 +184,7 @@ async def import_sales(
     await audit_service.log_event(
         session,
         event_type="sales.batch_imported",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="import_batch",
         target_id=batch.id,
@@ -215,6 +217,8 @@ async def import_sales_async(
     full_reload: bool = Query(False, alias="fullReload"),
     source: str = Query("adp", description="'adp', 'sika' sau 'sika_mtd' — alege parser-ul și izolează batch-urile pe source."),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
 ):
     """
     Start un job de import în background și returnează imediat `job_id`.
@@ -232,6 +236,25 @@ async def import_sales_async(
             status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_source", "message": "source trebuie 'adp', 'sika' sau 'sika_mtd'"},
         )
+
+    # Guard: source-ul trebuie sa corespunda org-ului activ.
+    from app.modules.tenants.models import Organization
+    org_slug = (await session.execute(
+        select(Organization.slug).where(Organization.id == tenant_id)
+    )).scalar_one_or_none()
+    expected_slug = "adeplast" if src_lower == "adp" else "sika"
+    if org_slug and org_slug != expected_slug:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={
+                "code": "wrong_org",
+                "message": (
+                    f"Source '{src_lower}' nu poate fi încărcat în organizația '{org_slug}'. "
+                    f"Comută pe organizația '{expected_slug}' și reîncarcă."
+                ),
+            },
+        )
+
     content = await file.read()
     if not content:
         raise HTTPException(
@@ -239,7 +262,7 @@ async def import_sales_async(
             detail={"code": "empty_file", "message": "Fișier gol"},
         )
 
-    existing = sales_jobs.has_active_job(current_user.tenant_id)
+    existing = sales_jobs.has_active_job(tenant_id)
     if existing is not None:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -250,11 +273,11 @@ async def import_sales_async(
             },
         )
 
-    job = await sales_jobs.create_job(tenant_id=current_user.tenant_id)
+    job = await sales_jobs.create_job(tenant_id=tenant_id)
     asyncio.create_task(
         sales_import_service.run_import_job(
             job_id=job.id,
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             user_id=current_user.id,
             content=content,
             filename=filename,
@@ -269,9 +292,10 @@ async def import_sales_async(
 async def get_import_job(
     job_id: UUID,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
 ):
     job = sales_jobs.get_job(job_id)
-    if job is None or job.tenant_id != current_user.tenant_id:
+    if job is None or job.tenant_id != tenant_id:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "job_not_found", "message": "Job inexistent"},
@@ -298,6 +322,7 @@ async def get_import_job(
 async def backfill_fks(
     request: Request,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -307,21 +332,21 @@ async def backfill_fks(
     Rulează ambele surse la rând.
     """
     adp_result = await sales_backfill.run_full_backfill(
-        session, current_user.tenant_id,
+        session, tenant_id,
         resolved_by_user_id=current_user.id, source="ADP",
     )
     sika_result = await sales_backfill.run_full_backfill(
-        session, current_user.tenant_id,
+        session, tenant_id,
         resolved_by_user_id=current_user.id, source="SIKA",
     )
     result = {"adp": adp_result, "sika": sika_result}
     await audit_service.log_event(
         session,
         event_type="sales.backfill_fks",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="tenant",
-        target_id=current_user.tenant_id,
+        target_id=tenant_id,
         metadata={"result": str(result)[:500]},
         request=request,
     )
@@ -394,9 +419,10 @@ async def delete_batch(
     request: Request,
     batch_id: UUID,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    deleted = await sales_service.delete_batch(session, current_user.tenant_id, batch_id)
+    deleted = await sales_service.delete_batch(session, tenant_id, batch_id)
     if deleted is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -405,7 +431,7 @@ async def delete_batch(
     await audit_service.log_event(
         session,
         event_type="sales.batch_deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="import_batch",
         target_id=batch_id,

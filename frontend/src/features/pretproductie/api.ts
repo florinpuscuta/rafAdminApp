@@ -1,4 +1,4 @@
-import { apiFetch, ApiError, getToken } from "../../shared/api";
+import { apiFetch, ApiError, getActiveOrgId, getToken } from "../../shared/api";
 import type {
   PPListResponse,
   PPMonthlyListResponse,
@@ -36,6 +36,8 @@ export function uploadPrices(
     xhr.open("POST", url);
     const token = getToken();
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    const activeOrg = getActiveOrgId();
+    if (activeOrg) xhr.setRequestHeader("X-Active-Org-Id", activeOrg);
     xhr.responseType = "json";
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {
@@ -94,6 +96,8 @@ export function uploadMonthly(
     xhr.open("POST", url);
     const token = getToken();
     if (token) xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+    const activeOrg = getActiveOrgId();
+    if (activeOrg) xhr.setRequestHeader("X-Active-Org-Id", activeOrg);
     xhr.responseType = "json";
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) {

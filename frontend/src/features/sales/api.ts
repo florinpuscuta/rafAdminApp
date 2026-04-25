@@ -1,4 +1,13 @@
-import { apiFetch, ApiError, getToken } from "../../shared/api";
+import { apiFetch, ApiError, getActiveOrgId, getToken } from "../../shared/api";
+
+function authHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {};
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const org = getActiveOrgId();
+  if (org) headers["X-Active-Org-Id"] = org;
+  return headers;
+}
 import type {
   ImportBatch,
   ImportJobAccepted,
@@ -34,7 +43,6 @@ export async function importSales(
   opts: { fullReload?: boolean } = {},
 ): Promise<ImportResponse> {
   // apiFetch nu suportă FormData; facem manual pentru multipart.
-  const token = getToken();
   const form = new FormData();
   form.append("file", file);
 
@@ -42,7 +50,7 @@ export async function importSales(
   const resp = await fetch(`${API_URL}/api/sales/import${qs}`, {
     method: "POST",
     body: form,
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    headers: authHeaders(),
   });
 
   if (!resp.ok) {
@@ -69,14 +77,13 @@ export async function importSalesAsync(
   file: File,
   opts: { fullReload?: boolean } = {},
 ): Promise<ImportJobAccepted> {
-  const token = getToken();
   const form = new FormData();
   form.append("file", file);
   const qs = opts.fullReload ? "?fullReload=true" : "";
   const resp = await fetch(`${API_URL}/api/sales/import/async${qs}`, {
     method: "POST",
     body: form,
-    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    headers: authHeaders(),
   });
   if (!resp.ok) {
     let code: string | undefined;
@@ -114,14 +121,13 @@ export async function downloadSalesExport(
   year?: number | null,
   month?: number | null,
 ): Promise<void> {
-  const token = getToken();
   const params = new URLSearchParams();
   if (year != null) params.set("year", String(year));
   if (month != null) params.set("month", String(month));
   const qs = params.toString();
   const resp = await fetch(
     `${API_URL}/api/sales/export${qs ? "?" + qs : ""}`,
-    { headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+    { headers: authHeaders() },
   );
   if (!resp.ok) throw new ApiError(resp.status, "Export a eșuat");
   const blob = await resp.blob();
