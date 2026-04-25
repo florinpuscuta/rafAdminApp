@@ -650,6 +650,9 @@ const FULL_CONSOLIDATED_PATHS = [
   "/evaluare/zona-agent",
   "/evaluare/sal-fix",
   "/targhet",
+  "/gallery",
+  "/marketing",
+  "/aprobari",
 ];
 const FULL_CONSOLIDATED_EXACT = ["/", "/evaluare"];
 
