@@ -123,20 +123,18 @@ async def get_current_org_ids(
 
 
 async def get_current_tenant_id(
+    user: User = Depends(get_current_user),
     org_ids: list[UUID] = Depends(get_current_org_ids),
 ) -> UUID:
     """Single-org dep — pentru endpoint-uri care NU suporta consolidated view.
-    Daca user-ul a trimis `X-Active-Org-Id: all`, returnam 400.
+
+    Cand user-ul trimite `X-Active-Org-Id: all` (sikadp consolidated mode),
+    facem fallback silent la `users.tenant_id` (orga default). Endpoint-ul
+    afiseaza date dintr-o singura orga; frontend-ul arata banner indicator
+    ca vederea NU e consolidata.
     """
     if len(org_ids) != 1:
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST,
-            detail={
-                "code": "single_org_required",
-                "message": "Acest endpoint nu suporta consolidated view (sikadp). "
-                           "Selecteaza o singura organizatie.",
-            },
-        )
+        return user.tenant_id
     return org_ids[0]
 
 

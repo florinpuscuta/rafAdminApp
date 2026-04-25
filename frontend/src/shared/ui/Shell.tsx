@@ -622,6 +622,9 @@ export function Shell({ children }: { children: ReactNode }) {
           </aside>
         )}
         <main id="main-content" style={styles.main} tabIndex={-1}>
+          {scope === "sikadp" && !inSettings && (
+            <SikadpBanner pathname={location.pathname} />
+          )}
           {children}
         </main>
       </div>
@@ -629,6 +632,35 @@ export function Shell({ children }: { children: ReactNode }) {
     </div>
   );
 }
+
+// Pagini care suporta full consolidated view (datele din ambele orgs combinat).
+const FULL_CONSOLIDATED_PATHS = [
+  "/analiza/margine",
+  "/analiza/marja-lunara",
+  "/consolidat",
+];
+
+function SikadpBanner({ pathname }: { pathname: string }) {
+  const fullSupport = FULL_CONSOLIDATED_PATHS.some((p) => pathname.startsWith(p));
+  if (fullSupport) return null;
+  return (
+    <div style={{
+      background: "rgba(251,146,60,0.10)",
+      border: "1px solid var(--orange)",
+      color: "var(--orange)",
+      padding: "8px 14px",
+      borderRadius: 8,
+      fontSize: 12,
+      marginBottom: 12,
+      lineHeight: 1.4,
+    }}>
+      ⚠ <strong>SIKADP — vedere parțială.</strong> Această pagină afișează doar
+      datele organizației tale default (Sika). Pentru vedere consolidată
+      completă, navighează la <strong>Marja</strong> sau <strong>Consolidat</strong>.
+    </div>
+  );
+}
+
 
 /**
  * Company switcher — cele 4 butoane în grila de sus. Culorile active
