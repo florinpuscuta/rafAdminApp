@@ -39,7 +39,7 @@ class DiscountRule(Base):
     )
     tenant_id: Mapped[UUID] = mapped_column(
         PG_UUID(as_uuid=True),
-        ForeignKey("tenants.id", ondelete="CASCADE"),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
         nullable=False, index=True,
     )
     client_canonical: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
