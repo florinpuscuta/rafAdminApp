@@ -11,8 +11,18 @@ from app.modules.agents.models import Agent, AgentAlias
 
 
 async def list_agents(session: AsyncSession, tenant_id: UUID) -> list[Agent]:
+    return await list_agents_by_tenants(session, [tenant_id])
+
+
+async def list_agents_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[Agent]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
-        select(Agent).where(Agent.tenant_id == tenant_id).order_by(Agent.full_name)
+        select(Agent)
+        .where(Agent.tenant_id.in_(tenant_ids))
+        .order_by(Agent.full_name)
     )
     return list(result.scalars().all())
 
@@ -39,9 +49,17 @@ async def create_agent(
 
 
 async def list_aliases(session: AsyncSession, tenant_id: UUID) -> list[AgentAlias]:
+    return await list_aliases_by_tenants(session, [tenant_id])
+
+
+async def list_aliases_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[AgentAlias]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
         select(AgentAlias)
-        .where(AgentAlias.tenant_id == tenant_id)
+        .where(AgentAlias.tenant_id.in_(tenant_ids))
         .order_by(AgentAlias.raw_agent)
     )
     return list(result.scalars().all())
@@ -145,8 +163,17 @@ from app.modules.agents.models import AgentStoreAssignment  # noqa: E402
 async def list_assignments(
     session: AsyncSession, tenant_id: UUID
 ) -> list[AgentStoreAssignment]:
+    return await list_assignments_by_tenants(session, [tenant_id])
+
+
+async def list_assignments_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[AgentStoreAssignment]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
-        select(AgentStoreAssignment).where(AgentStoreAssignment.tenant_id == tenant_id)
+        select(AgentStoreAssignment)
+        .where(AgentStoreAssignment.tenant_id.in_(tenant_ids))
     )
     return list(result.scalars().all())
 

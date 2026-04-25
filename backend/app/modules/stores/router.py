@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api import APIRouter
 from app.core.db import get_session
 from app.modules.audit import service as audit_service
-from app.modules.auth.deps import get_current_admin, get_current_tenant_id, get_current_user
+from app.modules.auth.deps import (
+    get_current_admin,
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from app.modules.sales import service as sales_service
 from app.modules.stores import service as stores_service
 from app.modules.stores.schemas import (
@@ -32,19 +37,19 @@ router = APIRouter(prefix="/api/stores", tags=["stores"])
 
 @router.get("", response_model=list[StoreOut])
 async def list_stores(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    stores = await stores_service.list_stores(session, tenant_id)
+    stores = await stores_service.list_stores_by_tenants(session, org_ids)
     return [StoreOut.model_validate(s) for s in stores]
 
 
 @router.get("/chains", response_model=list[str])
 async def list_chains(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    return await stores_service.list_chains(session, tenant_id)
+    return await stores_service.list_chains_by_tenants(session, org_ids)
 
 
 @router.post("", response_model=StoreOut, status_code=status.HTTP_201_CREATED)
@@ -73,10 +78,10 @@ async def create_store(
 
 @router.get("/unmapped", response_model=list[UnmappedClientRow])
 async def list_unmapped(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    rows = await sales_service.list_clients_without_store(session, tenant_id)
+    rows = await sales_service.list_clients_without_store_by_tenants(session, org_ids)
     return [
         UnmappedClientRow(raw_client=client, row_count=count, total_amount=total)
         for client, count, total in rows
@@ -85,13 +90,13 @@ async def list_unmapped(
 
 @router.get("/unmapped/suggestions", response_model=list[SuggestionRow])
 async def unmapped_suggestions(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     """Sugestii fuzzy-match pentru fiecare raw_client nemapat."""
-    rows = await sales_service.list_clients_without_store(session, tenant_id)
+    rows = await sales_service.list_clients_without_store_by_tenants(session, org_ids)
     raw_clients = [r[0] for r in rows]
-    stores = await stores_service.list_stores(session, tenant_id)
+    stores = await stores_service.list_stores_by_tenants(session, org_ids)
     if not stores:
         return [SuggestionRow(raw_client=r, suggestions=[]) for r in raw_clients]
     matches = stores_service.suggest_matches(raw_clients, stores)
@@ -109,10 +114,10 @@ async def unmapped_suggestions(
 
 @router.get("/aliases", response_model=list[StoreAliasOut])
 async def list_aliases(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    aliases = await stores_service.list_aliases(session, tenant_id)
+    aliases = await stores_service.list_aliases_by_tenants(session, org_ids)
     return [StoreAliasOut.model_validate(a) for a in aliases]
 
 
@@ -121,9 +126,10 @@ async def create_alias(
     request: Request,
     payload: CreateAliasRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    store = await stores_service.get_store(session, current_user.tenant_id, payload.store_id)
+    store = await stores_service.get_store(session, tenant_id, payload.store_id)
     if store is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -131,7 +137,7 @@ async def create_alias(
         )
 
     existing = await stores_service.get_alias_by_raw(
-        session, current_user.tenant_id, payload.raw_client
+        session, tenant_id, payload.raw_client
     )
     if existing is not None:
         raise HTTPException(
@@ -144,19 +150,19 @@ async def create_alias(
 
     alias = await stores_service.create_alias(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         raw_client=payload.raw_client,
         store_id=payload.store_id,
         resolved_by_user_id=current_user.id,
     )
     await sales_service.backfill_store_for_client(
-        session, current_user.tenant_id, payload.raw_client, payload.store_id
+        session, tenant_id, payload.raw_client, payload.store_id
     )
     await session.commit()
     await audit_service.log_event(
         session,
         event_type="alias.store.created",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="store_alias",
         target_id=alias.id,
@@ -172,15 +178,22 @@ async def update_alias(
     alias_id: UUID,
     payload: UpdateAliasRequest,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    alias = await stores_service.get_alias_by_id(session, current_user.tenant_id, alias_id)
+    alias = None
+    owner_tid = None
+    for tid in org_ids:
+        alias = await stores_service.get_alias_by_id(session, tid, alias_id)
+        if alias is not None:
+            owner_tid = tid
+            break
     if alias is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "alias_not_found", "message": "Alias inexistent"},
         )
-    new_store = await stores_service.get_store(session, current_user.tenant_id, payload.store_id)
+    new_store = await stores_service.get_store(session, owner_tid, payload.store_id)
     if new_store is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -192,7 +205,7 @@ async def update_alias(
 
     # 1) clear pe raw_sales vechi (pentru acest raw_client)
     await sales_service.clear_store_for_client(
-        session, current_user.tenant_id, alias.raw_client
+        session, owner_tid, alias.raw_client
     )
     # 2) modifică alias
     alias.store_id = payload.store_id
@@ -201,14 +214,14 @@ async def update_alias(
     alias.resolved_at = datetime.now(timezone.utc)
     # 3) backfill cu noul store
     await sales_service.backfill_store_for_client(
-        session, current_user.tenant_id, alias.raw_client, payload.store_id
+        session, owner_tid, alias.raw_client, payload.store_id
     )
     await session.commit()
     await session.refresh(alias)
     await audit_service.log_event(
         session,
         event_type="alias.store.updated",
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tid,
         user_id=current_user.id,
         target_type="store_alias",
         target_id=alias.id,
@@ -227,11 +240,16 @@ async def delete_alias(
     request: Request,
     alias_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    alias = await stores_service.get_alias_by_id(
-        session, current_user.tenant_id, alias_id
-    )
+    alias = None
+    owner_tid = None
+    for tid in org_ids:
+        alias = await stores_service.get_alias_by_id(session, tid, alias_id)
+        if alias is not None:
+            owner_tid = tid
+            break
     if alias is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -239,13 +257,13 @@ async def delete_alias(
         )
     raw_client = alias.raw_client
     await sales_service.clear_store_for_client(
-        session, current_user.tenant_id, raw_client
+        session, owner_tid, raw_client
     )
     await stores_service.delete_alias(session, alias)
     await audit_service.log_event(
         session,
         event_type="alias.store.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tid,
         user_id=current_user.id,
         target_type="store_alias",
         target_id=alias_id,
@@ -260,17 +278,18 @@ async def bulk_set_active(
     request: Request,
     payload: BulkSetActiveRequest,
     admin: User = Depends(get_current_admin),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """Activează/dezactivează magazine multiple simultan."""
     updated = await stores_service.bulk_set_active(
-        session, tenant_id=admin.tenant_id, store_ids=payload.ids, active=payload.active,
+        session, tenant_id=tenant_id, store_ids=payload.ids, active=payload.active,
     )
     await session.commit()
     await audit_service.log_event(
         session,
         event_type="store.bulk_set_active",
-        tenant_id=admin.tenant_id,
+        tenant_id=tenant_id,
         user_id=admin.id,
         metadata={"count": updated, "active": payload.active, "ids": [str(i) for i in payload.ids]},
         request=request,
@@ -283,13 +302,14 @@ async def merge_stores(
     request: Request,
     payload: MergeStoresRequest,
     admin: User = Depends(get_current_admin),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """Consolidează duplicate-ids în primary-id (transfer alias + raw_sales + assignments)."""
     try:
         counts = await stores_service.merge_into(
             session,
-            tenant_id=admin.tenant_id,
+            tenant_id=tenant_id,
             primary_id=payload.primary_id,
             duplicate_ids=payload.duplicate_ids,
         )
@@ -304,7 +324,7 @@ async def merge_stores(
     await audit_service.log_event(
         session,
         event_type="store.merged",
-        tenant_id=admin.tenant_id,
+        tenant_id=tenant_id,
         user_id=admin.id,
         target_type="store",
         target_id=payload.primary_id,
@@ -319,6 +339,7 @@ async def bulk_import_aliases(
     request: Request,
     file: UploadFile,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -361,8 +382,8 @@ async def bulk_import_aliases(
     idx = {name: i for i, name in enumerate(header)}
 
     # Preîncărcăm magazinele existente + alias-urile existente
-    existing_stores = {s.name: s for s in await stores_service.list_stores(session, current_user.tenant_id)}
-    existing_aliases = {a.raw_client for a in await stores_service.list_aliases(session, current_user.tenant_id)}
+    existing_stores = {s.name: s for s in await stores_service.list_stores(session, tenant_id)}
+    existing_aliases = {a.raw_client for a in await stores_service.list_aliases(session, tenant_id)}
 
     created_stores = 0
     created_aliases = 0
@@ -393,7 +414,7 @@ async def bulk_import_aliases(
             try:
                 store = await stores_service.create_store(
                     session,
-                    tenant_id=current_user.tenant_id,
+                    tenant_id=tenant_id,
                     name=store_name,
                     chain=chain,
                     city=city,
@@ -407,13 +428,13 @@ async def bulk_import_aliases(
         try:
             await stores_service.create_alias(
                 session,
-                tenant_id=current_user.tenant_id,
+                tenant_id=tenant_id,
                 raw_client=raw_client,
                 store_id=store.id,
                 resolved_by_user_id=current_user.id,
             )
             await sales_service.backfill_store_for_client(
-                session, current_user.tenant_id, raw_client, store.id
+                session, tenant_id, raw_client, store.id
             )
             existing_aliases.add(raw_client)
             created_aliases += 1
@@ -424,7 +445,7 @@ async def bulk_import_aliases(
     await audit_service.log_event(
         session,
         event_type="alias.store.bulk_imported",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         metadata={
             "filename": filename,

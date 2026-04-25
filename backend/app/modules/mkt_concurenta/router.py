@@ -26,7 +26,7 @@ from app.core.api import APIRouter
 from app.core.config import settings
 from app.core.db import get_session
 from app.modules.audit import service as audit_service
-from app.modules.auth.deps import get_current_user
+from app.modules.auth.deps import get_current_org_ids, get_current_tenant_id, get_current_user
 from app.modules.gallery import service as gallery_svc
 from app.modules.mkt_concurenta import service as svc
 from app.modules.mkt_concurenta.schemas import (
@@ -76,14 +76,14 @@ def _photo_to_out(photo) -> ConcurentaPhotoOut:
 @router.get("", response_model=ConcurentaYearResponse)
 async def list_year_grid(
     year: int = Query(default_factory=lambda: datetime.now().year, ge=2000, le=2100),
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> ConcurentaYearResponse:
     """
     Grid de 12 luni pentru un an. Port exact al blocului
     `window.loadConcurenta = async function()` din legacy (~12833).
     """
-    data = await svc.list_year(session, current_user.tenant_id, year)
+    data = await svc.list_year_by_tenants(session, org_ids, year)
     return ConcurentaYearResponse(
         year=data["year"],
         cells=[_cell_to_out(c) for c in data["cells"]],
@@ -99,6 +99,7 @@ async def ensure_month_folder(
     request: Request,
     payload: ConcurentaFolderEnsureRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> ConcurentaFolderOut:
     """
@@ -106,12 +107,12 @@ async def ensure_month_folder(
     folder-ul implicit la primul upload (`os.makedirs(folder_path, exist_ok=True)`).
     """
     folder = await svc.ensure_folder(
-        session, current_user.tenant_id, payload.year, payload.month
+        session, tenant_id, payload.year, payload.month
     )
     await audit_service.log_event(
         session,
         event_type="mkt_concurenta.folder.ensured",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="gallery_folder",
         target_id=folder.id,
@@ -133,7 +134,7 @@ async def ensure_month_folder(
 )
 async def list_month_photos(
     folder_key: str,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> ConcurentaPhotosResponse:
     """
@@ -141,8 +142,20 @@ async def list_month_photos(
     returnăm 200 cu `images: []` — legacy răspundea cu text gol la 404
     și UI-ul trata ambele ca „nicio poză".
     """
-    folder = await svc.get_folder_by_key(session, current_user.tenant_id, folder_key)
-    if folder is None:
+    # Multi-org: agregăm toate pozele din toate org-urile pentru folder_key
+    all_photos = []
+    folder_id_first: UUID | None = None
+    folder_name_first: str | None = None
+    for tid in org_ids:
+        folder = await svc.get_folder_by_key(session, tid, folder_key)
+        if folder is None:
+            continue
+        if folder_id_first is None:
+            folder_id_first = folder.id
+            folder_name_first = folder.name
+        photos = await svc.list_photos(session, tid, folder)
+        all_photos.extend(photos)
+    if folder_id_first is None or folder_name_first is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={
@@ -150,11 +163,11 @@ async def list_month_photos(
                 "message": "Folderul nu exista",
             },
         )
-    photos = await svc.list_photos(session, current_user.tenant_id, folder)
+    all_photos.sort(key=lambda p: p.filename)
     return ConcurentaPhotosResponse(
-        folder_key=folder.name,
-        folder_id=folder.id,
-        images=[_photo_to_out(p) for p in photos],
+        folder_key=folder_name_first,
+        folder_id=folder_id_first,
+        images=[_photo_to_out(p) for p in all_photos],
     )
 
 
@@ -168,6 +181,7 @@ async def upload_month_photos(
     folder_key: str,
     images: list[UploadFile],
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> ConcurentaUploadResponse:
     """
@@ -183,7 +197,7 @@ async def upload_month_photos(
             detail={"code": "invalid_folder_key", "message": "Folder invalid"},
         )
     year, month = parsed
-    folder = await svc.ensure_folder(session, current_user.tenant_id, year, month)
+    folder = await svc.ensure_folder(session, tenant_id, year, month)
 
     if not images:
         raise HTTPException(
@@ -209,7 +223,7 @@ async def upload_month_photos(
             continue
         photo = await gallery_svc.upload_photo(
             session,
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             folder=folder,
             filename=f.filename,
             content=content,
@@ -219,7 +233,7 @@ async def upload_month_photos(
         await audit_service.log_event(
             session,
             event_type="mkt_concurenta.photo.uploaded",
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             user_id=current_user.id,
             target_type="gallery_photo",
             target_id=photo.id,
@@ -242,11 +256,18 @@ async def delete_photo(
     request: Request,
     photo_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Șterge o poză. Oglinda `window.concDeleteImg` din legacy (~12977)."""
-    photo = await gallery_svc.get_photo(session, current_user.tenant_id, photo_id)
-    if photo is None:
+    photo = None
+    owner_tenant_id: UUID | None = None
+    for tid in org_ids:
+        photo = await gallery_svc.get_photo(session, tid, photo_id)
+        if photo is not None:
+            owner_tenant_id = tid
+            break
+    if photo is None or owner_tenant_id is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "photo_not_found", "message": "Poza nu exista"},
@@ -257,7 +278,7 @@ async def delete_photo(
     await audit_service.log_event(
         session,
         event_type="mkt_concurenta.photo.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tenant_id,
         user_id=current_user.id,
         target_type="gallery_photo",
         target_id=photo_id,
@@ -296,6 +317,7 @@ async def rotate_photo(
     request: Request,
     photo_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> ConcurentaPhotoOut:
     """
@@ -306,8 +328,14 @@ async def rotate_photo(
       - put_object (peste același object_key)
       - actualizează content_type/size_bytes în DB
     """
-    photo = await gallery_svc.get_photo(session, current_user.tenant_id, photo_id)
-    if photo is None:
+    photo = None
+    owner_tenant_id: UUID | None = None
+    for tid in org_ids:
+        photo = await gallery_svc.get_photo(session, tid, photo_id)
+        if photo is not None:
+            owner_tenant_id = tid
+            break
+    if photo is None or owner_tenant_id is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "photo_not_found", "message": "Poza nu exista"},
@@ -346,7 +374,7 @@ async def rotate_photo(
     await audit_service.log_event(
         session,
         event_type="mkt_concurenta.photo.rotated",
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tenant_id,
         user_id=current_user.id,
         target_type="gallery_photo",
         target_id=photo.id,

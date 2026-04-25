@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_user
+from app.modules.auth.deps import get_current_org_ids, get_current_tenant_id, get_current_user
 from app.modules.taskuri import service
 from app.modules.taskuri.schemas import (
     TaskCreate,
@@ -34,12 +34,12 @@ async def list_taskuri(
     agent_id: UUID | None = Query(None, alias="agentId"),
     due_from: date | None = Query(None, alias="dueFrom"),
     due_to: date | None = Query(None, alias="dueTo"),
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> TaskListResponse:
-    items = await service.list_tasks(
+    items = await service.list_tasks_by_tenants(
         session,
-        current_user.tenant_id,
+        org_ids,
         status=status_filter,
         agent_id=agent_id,
         due_from=due_from,
@@ -55,12 +55,13 @@ async def list_taskuri(
 async def create_task(
     payload: TaskCreate,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
     try:
         t = await service.create_task(
             session,
-            current_user.tenant_id,
+            tenant_id,
             title=payload.title,
             description=payload.description,
             status=payload.status,
@@ -74,7 +75,7 @@ async def create_task(
     await session.commit()
 
     result = await service.get_task_with_assignees(
-        session, current_user.tenant_id, t.id,
+        session, tenant_id, t.id,
     )
     return TaskOut.model_validate(result)
 
@@ -82,12 +83,14 @@ async def create_task(
 @router.get("/{task_id}", response_model=TaskOut)
 async def get_task(
     task_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
-    result = await service.get_task_with_assignees(
-        session, current_user.tenant_id, task_id,
-    )
+    result = None
+    for tid in org_ids:
+        result = await service.get_task_with_assignees(session, tid, task_id)
+        if result is not None:
+            break
     if result is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Task inexistent")
     return TaskOut.model_validate(result)
@@ -97,16 +100,27 @@ async def get_task(
 async def update_task(
     task_id: UUID,
     payload: TaskUpdate,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> TaskOut:
     # Separă "nu atinge due_date" de "șterge due_date" — ambele ajung None în
     # model_dump(exclude_unset=True) dacă câmpul e explicit None.
     data = payload.model_dump(exclude_unset=True)
+
+    # Localizam orga in care exista task-ul
+    target_tenant: UUID | None = None
+    for tid in org_ids:
+        existing = await service.get_task(session, tid, task_id)
+        if existing is not None:
+            target_tenant = tid
+            break
+    if target_tenant is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Task inexistent")
+
     try:
         t = await service.update_task(
             session,
-            current_user.tenant_id,
+            target_tenant,
             task_id,
             title=data.get("title"),
             description=data.get("description"),
@@ -123,7 +137,7 @@ async def update_task(
     await session.commit()
 
     result = await service.get_task_with_assignees(
-        session, current_user.tenant_id, t.id,
+        session, target_tenant, t.id,
     )
     return TaskOut.model_validate(result)
 
@@ -131,12 +145,14 @@ async def update_task(
 @router.delete("/{task_id}", status_code=204)
 async def delete_task(
     task_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> None:
-    ok = await service.delete_task(
-        session, current_user.tenant_id, task_id,
-    )
+    ok = False
+    for tid in org_ids:
+        ok = await service.delete_task(session, tid, task_id)
+        if ok:
+            break
     if not ok:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Task inexistent")
     await session.commit()

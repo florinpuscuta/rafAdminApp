@@ -163,7 +163,22 @@ async def _months_with_data(
     year: int,
     batch_source_groups: list[list[str]],
 ) -> set[int]:
-    """Lunile în `year` unde există măcar un rând private label KA."""
+    return await _months_with_data_by_tenants(
+        session, [tenant_id],
+        year=year, batch_source_groups=batch_source_groups,
+    )
+
+
+async def _months_with_data_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    year: int,
+    batch_source_groups: list[list[str]],
+) -> set[int]:
+    """Lunile în `year` unde există măcar un rând private label KA (multi-tenant)."""
+    if not tenant_ids:
+        return set()
     sources = {s for g in batch_source_groups for s in g}
     if not sources:
         return set()
@@ -173,7 +188,7 @@ async def _months_with_data(
         .join(Brand, Brand.id == Product.brand_id)
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
         .where(
-            RawSale.tenant_id == tenant_id,
+            RawSale.tenant_id.in_(tenant_ids),
             RawSale.year == year,
             func.upper(RawSale.channel) == "KA",
             Brand.is_private_label.is_(True),
@@ -192,11 +207,25 @@ async def _raw_rows(
     batch_source_groups: list[list[str]],
     months_filter: set[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Rânduri agregate private label KA pe (agent, store, client, year, month).
+    return await _raw_rows_by_tenants(
+        session, [tenant_id],
+        year_curr=year_curr,
+        batch_source_groups=batch_source_groups,
+        months_filter=months_filter,
+    )
 
-    În cadrul unui grup de surse, prioritizăm în ordinea listei — per
-    (year, month) doar primul source contribuie. Grupurile se însumează.
-    """
+
+async def _raw_rows_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    year_curr: int,
+    batch_source_groups: list[list[str]],
+    months_filter: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    """Rânduri agregate private label KA (multi-tenant). Vezi single-tenant variant."""
+    if not tenant_ids:
+        return []
     year_prev = year_curr - 1
     out: dict[
         tuple[UUID | None, UUID | None, str | None, int, int],
@@ -212,7 +241,7 @@ async def _raw_rows(
                 .join(Brand, Brand.id == Product.brand_id)
                 .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
                 .where(
-                    RawSale.tenant_id == tenant_id,
+                    RawSale.tenant_id.in_(tenant_ids),
                     RawSale.year.in_([year_prev, year_curr]),
                     func.upper(RawSale.channel) == "KA",
                     Brand.is_private_label.is_(True),
@@ -246,7 +275,7 @@ async def _raw_rows(
                 .join(Brand, Brand.id == Product.brand_id)
                 .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
                 .where(
-                    RawSale.tenant_id == tenant_id,
+                    RawSale.tenant_id.in_(tenant_ids),
                     RawSale.year.in_(new_years),
                     RawSale.month.in_(new_months),
                     func.upper(RawSale.channel) == "KA",
@@ -289,12 +318,25 @@ async def _chain_category_rows(
     batch_source_groups: list[list[str]],
     months_filter: set[int] | None,
 ) -> list[dict[str, Any]]:
-    """Rânduri agregate private label KA pe (client, category_code, year).
+    return await _chain_category_rows_by_tenants(
+        session, [tenant_id],
+        year_curr=year_curr,
+        batch_source_groups=batch_source_groups,
+        months_filter=months_filter,
+    )
 
-    Filtrăm pe `ProductCategory.code IN ('MU','EPS','UMEDE')` — alte categorii
-    (VARSACI etc.) nu intră în breakdown-ul pe rețea cerut de UI.
-    Aceeași logică de dedup (primul source din grup câștigă perechea year,month).
-    """
+
+async def _chain_category_rows_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    year_curr: int,
+    batch_source_groups: list[list[str]],
+    months_filter: set[int] | None,
+) -> list[dict[str, Any]]:
+    """Rânduri agregate private label KA pe (client, category_code, year). Multi-tenant."""
+    if not tenant_ids:
+        return []
     year_prev = year_curr - 1
     out: dict[tuple[str | None, str, int], dict[str, Any]] = {}
 
@@ -308,7 +350,7 @@ async def _chain_category_rows(
                 .join(ProductCategory, ProductCategory.id == Product.category_id)
                 .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
                 .where(
-                    RawSale.tenant_id == tenant_id,
+                    RawSale.tenant_id.in_(tenant_ids),
                     RawSale.year.in_([year_prev, year_curr]),
                     func.upper(RawSale.channel) == "KA",
                     Brand.is_private_label.is_(True),
@@ -342,7 +384,7 @@ async def _chain_category_rows(
                 .join(ProductCategory, ProductCategory.id == Product.category_id)
                 .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
                 .where(
-                    RawSale.tenant_id == tenant_id,
+                    RawSale.tenant_id.in_(tenant_ids),
                     RawSale.year.in_(new_years),
                     RawSale.month.in_(new_months),
                     func.upper(RawSale.channel) == "KA",
@@ -377,8 +419,19 @@ async def _last_update(
     *,
     sources: list[str],
 ) -> datetime | None:
+    return await _last_update_by_tenants(session, [tenant_id], sources=sources)
+
+
+async def _last_update_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    sources: list[str],
+) -> datetime | None:
+    if not tenant_ids:
+        return None
     stmt = select(func.max(ImportBatch.created_at)).where(
-        ImportBatch.tenant_id == tenant_id,
+        ImportBatch.tenant_id.in_(tenant_ids),
         ImportBatch.source.in_(sources),
     )
     return (await session.execute(stmt)).scalar_one_or_none()
@@ -396,29 +449,51 @@ async def _build(
     batch_source_groups: list[list[str]],
     months_filter: set[int] | None = None,
 ) -> MarcaPrivataData:
+    return await _build_by_tenants(
+        session, [tenant_id],
+        scope=scope, year_curr=year_curr,
+        batch_source_groups=batch_source_groups,
+        months_filter=months_filter,
+    )
+
+
+async def _build_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    scope: str,
+    year_curr: int,
+    batch_source_groups: list[list[str]],
+    months_filter: set[int] | None = None,
+) -> MarcaPrivataData:
     # Auto-YTD: restricționăm la lunile cu date în year_curr pentru comparație
     # pe perioade echivalente (ex. Ian-Apr vs Ian-Apr).
     if months_filter is None:
-        months_filter = await _months_with_data(
-            session, tenant_id,
+        months_filter = await _months_with_data_by_tenants(
+            session, tenant_ids,
             year=year_curr, batch_source_groups=batch_source_groups,
         )
 
-    rows = await _raw_rows(
-        session, tenant_id,
+    rows = await _raw_rows_by_tenants(
+        session, tenant_ids,
         year_curr=year_curr, batch_source_groups=batch_source_groups,
         months_filter=months_filter,
     )
 
-    # Rezolvare SAM pentru client canonic — în prezent doar consumăm
-    # rezultatul (fără excluderi), dar păstrăm hook-ul pentru filtrări viitoare.
-    client_map = await client_sam_map(session, tenant_id)
+    # Rezolvare SAM per tenant — păstrăm hook-ul (în prezent doar consumăm,
+    # fără excluderi).
+    client_maps: dict[UUID, dict] = {}
+    store_maps: dict[UUID, dict] = {}
+    for tid in tenant_ids:
+        client_maps[tid] = await client_sam_map(session, tid)
+
     store_ids_to_resolve: set[UUID] = {
         r["store_id"]
         for r in rows
         if r["agent_id"] is None and r["store_id"] is not None
     }
-    store_map = await store_agent_map(session, tenant_id, store_ids_to_resolve)
+    for tid in tenant_ids:
+        store_maps[tid] = await store_agent_map(session, tid, store_ids_to_resolve)
 
     data = MarcaPrivataData(
         scope=scope,
@@ -429,10 +504,14 @@ async def _build(
     year_prev = year_curr - 1
 
     for r in rows:
-        _resolved_agent, _resolved_store = resolve_canonical(
-            agent_id=r["agent_id"], store_id=r["store_id"], client=r.get("client"),
-            client_map=client_map, store_map=store_map,
-        )
+        # Pentru rezolvare folosim primul tenant care produce un match (best-effort).
+        for tid in tenant_ids:
+            _resolved_agent, _resolved_store = resolve_canonical(
+                agent_id=r["agent_id"], store_id=r["store_id"], client=r.get("client"),
+                client_map=client_maps[tid], store_map=store_maps[tid],
+            )
+            if _resolved_agent is not None or _resolved_store is not None:
+                break
 
         m = r["month"]
         cell = data.cell(m)
@@ -447,8 +526,8 @@ async def _build(
 
     # Agregare pe rețea (Dedeman/Altex/Leroy/Hornbach/Alte) × categorie
     # (MU/EPS/UMEDE). Se bazează pe produs.category_id → ProductCategory.code.
-    cat_rows = await _chain_category_rows(
-        session, tenant_id,
+    cat_rows = await _chain_category_rows_by_tenants(
+        session, tenant_ids,
         year_curr=year_curr, batch_source_groups=batch_source_groups,
         months_filter=months_filter,
     )
@@ -465,8 +544,6 @@ async def _build(
             cr.sales_y2 += r["amount"]
             cc.sales_y2 += r["amount"]
 
-    # Ordonăm după CHAIN_ORDER (rețelele cunoscute primele), cu fallback pe
-    # desc. sales_y1 pentru "Alte"/chains necunoscute.
     def _chain_sort_key(c: ChainRow) -> tuple[int, Decimal]:
         try:
             return (CHAIN_ORDER.index(c.chain), -c.sales_y1)
@@ -475,8 +552,8 @@ async def _build(
 
     data.chains = sorted(by_chain.values(), key=_chain_sort_key)
 
-    data.last_update = await _last_update(
-        session, tenant_id,
+    data.last_update = await _last_update_by_tenants(
+        session, tenant_ids,
         sources=[s for g in batch_source_groups for s in g],
     )
     return data
@@ -486,8 +563,18 @@ async def get_for_adp(
     session: AsyncSession, tenant_id: UUID, *, year_curr: int,
     months_filter: set[int] | None = None,
 ) -> MarcaPrivataData:
-    return await _build(
-        session, tenant_id,
+    return await get_for_adp_by_tenants(
+        session, [tenant_id],
+        year_curr=year_curr, months_filter=months_filter,
+    )
+
+
+async def get_for_adp_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], *, year_curr: int,
+    months_filter: set[int] | None = None,
+) -> MarcaPrivataData:
+    return await _build_by_tenants(
+        session, tenant_ids,
         scope="adp", year_curr=year_curr,
         batch_source_groups=_GROUPS_ADP,
         months_filter=months_filter,

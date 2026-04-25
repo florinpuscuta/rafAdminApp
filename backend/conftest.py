@@ -113,7 +113,29 @@ async def _create_schema(engine) -> None:
         except ModuleNotFoundError:
             continue
 
+    # Custom PG enum types — modelele folosesc PG_ENUM(create_type=False)
+    # ca să nu duplice cu Alembic. Pentru testele care nu rulează migrațiile,
+    # le creăm manual înainte de metadata.create_all.
+    enum_ddl = [
+        (
+            "organization_kind",
+            "CREATE TYPE organization_kind AS ENUM ('production','demo','test')",
+        ),
+        (
+            "user_role",
+            "CREATE TYPE user_role AS ENUM "
+            "('admin','director','finance_manager','regional_manager',"
+            "'sales_agent','viewer')",
+        ),
+    ]
     async with engine.begin() as conn:
+        for type_name, ddl in enum_ddl:
+            exists = await conn.execute(
+                text("SELECT 1 FROM pg_type WHERE typname = :n"),
+                {"n": type_name},
+            )
+            if exists.first() is None:
+                await conn.execute(text(ddl))
         await conn.run_sync(Base.metadata.create_all)
 
 
@@ -183,18 +205,16 @@ async def _cleanup_after_test(_test_db) -> AsyncIterator[None]:
 
     yield
 
-    # TRUNCATE tabelele (RESTART IDENTITY CASCADE = resetăm seq + șterge deps)
+    # TRUNCATE bulk: descoperim toate tabelele aplicative din metadata și
+    # le truncăm CASCADE — robust față de schema în evoluție (ex. redenumire
+    # tenants → organizations, tabele noi adăugate în refactor-uri).
     async with core_db.engine.begin() as conn:
-        await conn.execute(
-            text(
-                "TRUNCATE TABLE "
-                "raw_sales, import_batches, "
-                "store_aliases, agent_aliases, product_aliases, "
-                "stores, agents, products, "
-                "password_reset_tokens, users, tenants "
-                "RESTART IDENTITY CASCADE"
+        tables = list(reversed(Base.metadata.sorted_tables))
+        if tables:
+            tnames = ", ".join(f'"{t.name}"' for t in tables)
+            await conn.execute(
+                text(f"TRUNCATE TABLE {tnames} RESTART IDENTITY CASCADE")
             )
-        )
 
 
 # ---------------------------------------------------------------------------

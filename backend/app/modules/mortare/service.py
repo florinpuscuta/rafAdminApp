@@ -132,6 +132,21 @@ async def _months_with_data(
     year: int,
     batch_source_groups: list[list[str]],
 ) -> set[int]:
+    return await _months_with_data_by_tenants(
+        session, [tenant_id],
+        year=year, batch_source_groups=batch_source_groups,
+    )
+
+
+async def _months_with_data_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    year: int,
+    batch_source_groups: list[list[str]],
+) -> set[int]:
+    if not tenant_ids:
+        return set()
     sources = {s for g in batch_source_groups for s in g}
     if not sources:
         return set()
@@ -141,7 +156,7 @@ async def _months_with_data(
         .join(ProductCategory, ProductCategory.id == Product.category_id)
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
         .where(
-            RawSale.tenant_id == tenant_id,
+            RawSale.tenant_id.in_(tenant_ids),
             RawSale.year == year,
             _silozuri_filter(),
             ImportBatch.source.in_(sources),
@@ -159,6 +174,24 @@ async def _monthly_rows(
     batch_source_groups: list[list[str]],
     months_filter: set[int] | None,
 ) -> list[dict[str, Any]]:
+    return await _monthly_rows_by_tenants(
+        session, [tenant_id],
+        year_curr=year_curr,
+        batch_source_groups=batch_source_groups,
+        months_filter=months_filter,
+    )
+
+
+async def _monthly_rows_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    year_curr: int,
+    batch_source_groups: list[list[str]],
+    months_filter: set[int] | None,
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     year_prev = year_curr - 1
     out: dict[tuple[int, int], dict[str, Any]] = {}
 
@@ -171,7 +204,7 @@ async def _monthly_rows(
                 .join(ProductCategory, ProductCategory.id == Product.category_id)
                 .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
                 .where(
-                    RawSale.tenant_id == tenant_id,
+                    RawSale.tenant_id.in_(tenant_ids),
                     RawSale.year.in_([year_prev, year_curr]),
                     _silozuri_filter(),
                     ImportBatch.source == src,
@@ -201,7 +234,7 @@ async def _monthly_rows(
                 .join(ProductCategory, ProductCategory.id == Product.category_id)
                 .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
                 .where(
-                    RawSale.tenant_id == tenant_id,
+                    RawSale.tenant_id.in_(tenant_ids),
                     RawSale.year.in_(new_years),
                     RawSale.month.in_(new_months),
                     _silozuri_filter(),
@@ -237,14 +270,32 @@ async def _product_rows(
     batch_source_groups: list[list[str]],
     months_filter: set[int] | None,
 ) -> list[dict[str, Any]]:
-    """Agregare pe (product_id, year) pentru listă produse."""
+    return await _product_rows_by_tenants(
+        session, [tenant_id],
+        year_curr=year_curr,
+        batch_source_groups=batch_source_groups,
+        months_filter=months_filter,
+    )
+
+
+async def _product_rows_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    year_curr: int,
+    batch_source_groups: list[list[str]],
+    months_filter: set[int] | None,
+) -> list[dict[str, Any]]:
+    """Agregare pe (product_id, year) pentru listă produse (multi-tenant)."""
+    if not tenant_ids:
+        return []
     year_prev = year_curr - 1
     sources = {s for g in batch_source_groups for s in g}
     if not sources:
         return []
 
     filters = [
-        RawSale.tenant_id == tenant_id,
+        RawSale.tenant_id.in_(tenant_ids),
         RawSale.year.in_([year_prev, year_curr]),
         _silozuri_filter(),
         ImportBatch.source.in_(sources),
@@ -287,8 +338,19 @@ async def _last_update(
     *,
     sources: list[str],
 ) -> datetime | None:
+    return await _last_update_by_tenants(session, [tenant_id], sources=sources)
+
+
+async def _last_update_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    sources: list[str],
+) -> datetime | None:
+    if not tenant_ids:
+        return None
     stmt = select(func.max(ImportBatch.created_at)).where(
-        ImportBatch.tenant_id == tenant_id,
+        ImportBatch.tenant_id.in_(tenant_ids),
         ImportBatch.source.in_(sources),
     )
     return (await session.execute(stmt)).scalar_one_or_none()
@@ -306,9 +368,26 @@ async def _build(
     batch_source_groups: list[list[str]],
     months_filter: set[int] | None = None,
 ) -> MortareData:
+    return await _build_by_tenants(
+        session, [tenant_id],
+        scope=scope, year_curr=year_curr,
+        batch_source_groups=batch_source_groups,
+        months_filter=months_filter,
+    )
+
+
+async def _build_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    scope: str,
+    year_curr: int,
+    batch_source_groups: list[list[str]],
+    months_filter: set[int] | None = None,
+) -> MortareData:
     if months_filter is None:
-        months_filter = await _months_with_data(
-            session, tenant_id,
+        months_filter = await _months_with_data_by_tenants(
+            session, tenant_ids,
             year=year_curr, batch_source_groups=batch_source_groups,
         )
 
@@ -320,8 +399,8 @@ async def _build(
     )
 
     # 1) Agregare lunară
-    monthly = await _monthly_rows(
-        session, tenant_id,
+    monthly = await _monthly_rows_by_tenants(
+        session, tenant_ids,
         year_curr=year_curr, batch_source_groups=batch_source_groups,
         months_filter=months_filter,
     )
@@ -339,8 +418,8 @@ async def _build(
         data.cell(m)
 
     # 3) Agregare pe produs
-    prod_rows = await _product_rows(
-        session, tenant_id,
+    prod_rows = await _product_rows_by_tenants(
+        session, tenant_ids,
         year_curr=year_curr, batch_source_groups=batch_source_groups,
         months_filter=months_filter,
     )
@@ -364,8 +443,8 @@ async def _build(
         key=lambda p: (-(p.sales_y1 or Decimal(0)), -(p.sales_y2 or Decimal(0))),
     )
 
-    data.last_update = await _last_update(
-        session, tenant_id,
+    data.last_update = await _last_update_by_tenants(
+        session, tenant_ids,
         sources=[s for g in batch_source_groups for s in g],
     )
     return data
@@ -375,8 +454,18 @@ async def get_for_adp(
     session: AsyncSession, tenant_id: UUID, *, year_curr: int,
     months_filter: set[int] | None = None,
 ) -> MortareData:
-    return await _build(
-        session, tenant_id,
+    return await get_for_adp_by_tenants(
+        session, [tenant_id],
+        year_curr=year_curr, months_filter=months_filter,
+    )
+
+
+async def get_for_adp_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], *, year_curr: int,
+    months_filter: set[int] | None = None,
+) -> MortareData:
+    return await _build_by_tenants(
+        session, tenant_ids,
         scope="adp", year_curr=year_curr,
         batch_source_groups=_GROUPS_ADP,
         months_filter=months_filter,

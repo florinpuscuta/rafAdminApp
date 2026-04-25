@@ -11,8 +11,18 @@ from app.modules.products.models import Product, ProductAlias
 
 
 async def list_products(session: AsyncSession, tenant_id: UUID) -> list[Product]:
+    return await list_products_by_tenants(session, [tenant_id])
+
+
+async def list_products_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[Product]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
-        select(Product).where(Product.tenant_id == tenant_id).order_by(Product.code)
+        select(Product)
+        .where(Product.tenant_id.in_(tenant_ids))
+        .order_by(Product.code)
     )
     return list(result.scalars().all())
 
@@ -44,9 +54,17 @@ async def create_product(
 
 
 async def list_aliases(session: AsyncSession, tenant_id: UUID) -> list[ProductAlias]:
+    return await list_aliases_by_tenants(session, [tenant_id])
+
+
+async def list_aliases_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[ProductAlias]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
         select(ProductAlias)
-        .where(ProductAlias.tenant_id == tenant_id)
+        .where(ProductAlias.tenant_id.in_(tenant_ids))
         .order_by(ProductAlias.raw_code)
     )
     return list(result.scalars().all())
@@ -146,9 +164,17 @@ async def bulk_set_active(
 
 
 async def list_categories(session: AsyncSession, tenant_id: UUID) -> list[str]:
+    return await list_categories_by_tenants(session, [tenant_id])
+
+
+async def list_categories_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[str]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
         select(Product.category)
-        .where(Product.tenant_id == tenant_id, Product.category.is_not(None))
+        .where(Product.tenant_id.in_(tenant_ids), Product.category.is_not(None))
         .distinct()
         .order_by(Product.category)
     )

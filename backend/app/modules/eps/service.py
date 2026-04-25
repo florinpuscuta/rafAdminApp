@@ -39,17 +39,29 @@ async def details_by_month(
     y2: int,
     months: Iterable[int] | None = None,
 ) -> list[dict]:
-    """
-    Returnează [{category, month, month_name, qty_y1, qty_y2, sales_y1,
-    sales_y2}, ...] grupat pe (canal KA/RETAIL, lună).
-    """
+    return await details_by_month_by_tenants(
+        session, [tenant_id], y1=y1, y2=y2, months=months,
+    )
+
+
+async def details_by_month_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    y1: int,
+    y2: int,
+    months: Iterable[int] | None = None,
+) -> list[dict]:
+    """Multi-tenant variant — agregare cross-org."""
+    if not tenant_ids:
+        return []
     channel_cat = case(
         (func.upper(RawSale.channel) == "KA", "KA"),
         else_="RETAIL",
     ).label("category")
 
     filters = [
-        RawSale.tenant_id == tenant_id,
+        RawSale.tenant_id.in_(tenant_ids),
         RawSale.year.in_([y1, y2]),
         ProductCategory.code == "EPS",
         # Doar KA (perle/granule/blocuri/deșeuri EPS — "non-MM" — excluse;
@@ -112,16 +124,32 @@ async def breakdown_by_class(
     y2: int,
     months: Iterable[int] | None = None,
 ) -> list[dict]:
+    return await breakdown_by_class_by_tenants(
+        session, [tenant_id], y1=y1, y2=y2, months=months,
+    )
+
+
+async def breakdown_by_class_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    y1: int,
+    y2: int,
+    months: Iterable[int] | None = None,
+) -> list[dict]:
     """Breakdown pe clasa EPS (50/70/80/100/120/150/200), KA only, plăci
     (cu MM în nume). Scoate primul număr după 'EPS' din numele produsului.
+    Multi-tenant variant.
     """
+    if not tenant_ids:
+        return []
     from sqlalchemy import text
 
     # Extragem clasa: primul număr după "EPS" (ex. "ADEPLAST EPS 80+ 100MM" → "80").
     class_col = func.substring(Product.name, r"[Ee][Pp][Ss][ _-]*(\d+)").label("cls")
 
     filters = [
-        RawSale.tenant_id == tenant_id,
+        RawSale.tenant_id.in_(tenant_ids),
         RawSale.year.in_([y1, y2]),
         ProductCategory.code == "EPS",
         func.upper(RawSale.channel) == "KA",

@@ -46,10 +46,18 @@ export function deletePromotion(id: string): Promise<void> {
 }
 
 export function simulatePromotion(
-  id: string, baseline: BaselineKind,
+  id: string,
+  baseline: BaselineKind,
+  manualQuantities?: Record<string, string> | null,
 ): Promise<PromoSimResponse> {
   return apiFetch<PromoSimResponse>(`${BASE}/${id}/simulate?baseline=${baseline}`, {
     method: "POST",
+    body: JSON.stringify({
+      baselineKind: baseline,
+      manualQuantities: manualQuantities && Object.keys(manualQuantities).length > 0
+        ? manualQuantities
+        : null,
+    }),
   });
 }
 

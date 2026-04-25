@@ -22,7 +22,7 @@ from app.modules.activitate.schemas import (
     ActivitateVisitCreate,
     ActivitateVisitCreated,
 )
-from app.modules.auth.deps import get_current_tenant_id, get_current_user
+from app.modules.auth.deps import get_current_org_ids, get_current_tenant_id, get_current_user
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/api/activitate", tags=["activitate"])
@@ -46,7 +46,7 @@ async def get_activitate(
     date_: date | None = Query(None, alias="date"),
     date_from: date | None = Query(None, alias="from"),
     date_to: date | None = Query(None, alias="to"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = _check_scope(scope)
@@ -60,8 +60,8 @@ async def get_activitate(
     if dt < df:
         df, dt = dt, df
 
-    data = await svc.get_activitate(
-        session, tenant_id, scope=scope, date_from=df, date_to=dt,
+    data = await svc.get_activitate_by_tenants(
+        session, org_ids, scope=scope, date_from=df, date_to=dt,
     )
     return ActivitateResponse(**data)
 

@@ -71,15 +71,20 @@ async def _first_photo(
 async def list_folders_with_cover(
     session: AsyncSession, tenant_id: UUID
 ) -> list[dict[str, Any]]:
-    """Listă foldere catalog, sortate descrescător după lună (sau nume).
+    """Wrapper single-tenant — vezi `list_folders_with_cover_by_tenants`."""
+    return await list_folders_with_cover_by_tenants(session, [tenant_id])
 
-    Returnează dict-uri gata de serializare (include cover URL).
-    Mirror peste legacy `api_gallery_folders('catalog')` dar cu cover presigned.
-    """
+
+async def list_folders_with_cover_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    """Listă foldere catalog din mai multe tenants (multi-org)."""
+    if not tenant_ids:
+        return []
     count_subq = (
         select(GalleryPhoto.folder_id, func.count(GalleryPhoto.id).label("n"))
         .where(
-            GalleryPhoto.tenant_id == tenant_id,
+            GalleryPhoto.tenant_id.in_(tenant_ids),
             GalleryPhoto.approval_status == "approved",
         )
         .group_by(GalleryPhoto.folder_id)
@@ -89,7 +94,7 @@ async def list_folders_with_cover(
         select(GalleryFolder, func.coalesce(count_subq.c.n, 0))
         .outerjoin(count_subq, count_subq.c.folder_id == GalleryFolder.id)
         .where(
-            GalleryFolder.tenant_id == tenant_id,
+            GalleryFolder.tenant_id.in_(tenant_ids),
             GalleryFolder.type == GALLERY_TYPE,
         )
     )
@@ -99,7 +104,7 @@ async def list_folders_with_cover(
     for folder, count in rows:
         cover_url: str | None = None
         if int(count) > 0:
-            first = await _first_photo(session, tenant_id, folder.id)
+            first = await _first_photo(session, folder.tenant_id, folder.id)
             if first is not None:
                 cover_url = gallery_svc.photo_url(first)
         month = _extract_month(folder.name)
@@ -111,11 +116,6 @@ async def list_folders_with_cover(
             "cover_url": cover_url,
             "created_at": folder.created_at,
         })
-
-    # Sortare: luni recente primele; fallback pe nume desc (legacy: reverse=True)
-    def _sort_key(it: dict[str, Any]) -> tuple[int, str]:
-        # luni cu month parsabil au prioritate (0), apoi descrescător
-        return (0 if it["month"] else 1, it["month"] or "") if it["month"] else (1, it["name"])
 
     items.sort(key=lambda it: (it["month"] or "~"), reverse=True)
     return items
@@ -145,7 +145,13 @@ async def list_photos_for_folder(
 
 # ── Legacy compat: vechiul placeholder `list_items` (menține tests) ──
 async def list_items(session: AsyncSession, tenant_id: UUID) -> dict[str, Any]:
-    folders = await list_folders_with_cover(session, tenant_id)
+    return await list_items_by_tenants(session, [tenant_id])
+
+
+async def list_items_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> dict[str, Any]:
+    folders = await list_folders_with_cover_by_tenants(session, tenant_ids)
     items = [
         {
             "id": str(f["id"]),

@@ -30,12 +30,15 @@ from app.modules.mkt_panouri.models import PanouStand
 async def list_stores(
     session: AsyncSession, tenant_id: UUID,
 ) -> list[dict[str, Any]]:
-    """Lista magazine KA (cheie_finala) + panel_count per magazin.
+    return await list_stores_by_tenants(session, [tenant_id])
 
-    Port 1:1 al `api_panouri_stores` din `gallery.py:458` (fără folder_counts
-    — fotografiile SaaS trăiesc în `gallery_photos`, tracking separat).
-    """
-    # Magazine unice din Noemi mapping, excluzând PUSKIN și combinate.
+
+async def list_stores_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    """Lista magazine KA (cheie_finala) + panel_count per magazin (multi-org)."""
+    if not tenant_ids:
+        return []
     store_rows = (await session.execute(
         select(
             StoreAgentMapping.cheie_finala,
@@ -44,7 +47,7 @@ async def list_stores(
             StoreAgentMapping.ship_to_original,
         )
         .where(
-            StoreAgentMapping.tenant_id == tenant_id,
+            StoreAgentMapping.tenant_id.in_(tenant_ids),
             StoreAgentMapping.cheie_finala.is_not(None),
             StoreAgentMapping.cheie_finala != "",
             ~func.upper(StoreAgentMapping.client_original).like("%PUSKIN%"),
@@ -66,26 +69,30 @@ async def list_stores(
             "ship_to": st or "",
         })
 
-    # Panel count per store.
+    # Panel count per store — agregat cross-tenant.
     count_rows = (await session.execute(
         select(PanouStand.store_name, func.count(PanouStand.id))
-        .where(PanouStand.tenant_id == tenant_id)
+        .where(PanouStand.tenant_id.in_(tenant_ids))
         .group_by(PanouStand.store_name)
     )).all()
-    counts = {r[0]: r[1] for r in count_rows}
+    counts: dict[str, int] = {}
+    for r in count_rows:
+        counts[r[0]] = counts.get(r[0], 0) + int(r[1] or 0)
 
     # Photo count per store — din gallery (type='panouri', name=store_name). Doar approved.
     photo_rows = (await session.execute(
         select(GalleryFolder.name, func.count(GalleryPhoto.id))
         .join(GalleryPhoto, GalleryPhoto.folder_id == GalleryFolder.id)
         .where(
-            GalleryFolder.tenant_id == tenant_id,
+            GalleryFolder.tenant_id.in_(tenant_ids),
             GalleryFolder.type == "panouri",
             GalleryPhoto.approval_status == "approved",
         )
         .group_by(GalleryFolder.name)
     )).all()
-    photo_counts = {r[0]: r[1] for r in photo_rows}
+    photo_counts: dict[str, int] = {}
+    for r in photo_rows:
+        photo_counts[r[0]] = photo_counts.get(r[0], 0) + int(r[1] or 0)
 
     for s in stores:
         s["panel_count"] = counts.get(s["name"], 0)
@@ -96,11 +103,19 @@ async def list_stores(
 async def get_store_detail(
     session: AsyncSession, tenant_id: UUID, store_name: str,
 ) -> dict[str, Any]:
-    """Port al `api_panouri_store_detail` din `gallery.py:518`."""
+    return await get_store_detail_by_tenants(session, [tenant_id], store_name)
+
+
+async def get_store_detail_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], store_name: str,
+) -> dict[str, Any]:
+    """Port al `api_panouri_store_detail` din `gallery.py:518` (multi-org)."""
+    if not tenant_ids:
+        return {"store": store_name, "panels": [], "photos": []}
     rows = (await session.execute(
         select(PanouStand)
         .where(
-            PanouStand.tenant_id == tenant_id,
+            PanouStand.tenant_id.in_(tenant_ids),
             PanouStand.store_name == store_name,
         )
         .order_by(PanouStand.panel_type, PanouStand.title)
@@ -134,7 +149,7 @@ async def get_store_detail(
         )
         .join(GalleryFolder, GalleryFolder.id == GalleryPhoto.folder_id)
         .where(
-            GalleryPhoto.tenant_id == tenant_id,
+            GalleryPhoto.tenant_id.in_(tenant_ids),
             GalleryFolder.type == "panouri",
             GalleryFolder.name == store_name,
             GalleryPhoto.approval_status == "approved",

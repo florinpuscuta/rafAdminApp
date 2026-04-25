@@ -50,27 +50,47 @@ def _now_ts() -> str:
 # ── Raioane CRUD ────────────────────────────────────────────────────────────
 
 async def get_raioane(session: AsyncSession, tenant_id: UUID) -> list[dict[str, Any]]:
+    return await get_raioane_by_tenants(session, [tenant_id])
+
+
+async def get_raioane_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     rows = (await session.execute(
         select(FacingRaion)
-        .where(FacingRaion.tenant_id == tenant_id)
+        .where(FacingRaion.tenant_id.in_(tenant_ids))
         .order_by(FacingRaion.sort_order)
     )).scalars().all()
-    return [
-        {
+    # Dedupe pe (name, parent_id) — păstrăm primul row găsit
+    seen: set[tuple[str, UUID | None]] = set()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        key = (r.name, r.parent_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({
             "id": r.id,
             "name": r.name,
             "sort_order": r.sort_order,
             "active": r.active,
             "parent_id": r.parent_id,
-        }
-        for r in rows
-    ]
+        })
+    return out
 
 
 async def get_raioane_tree(
     session: AsyncSession, tenant_id: UUID,
 ) -> list[dict[str, Any]]:
-    raws = await get_raioane(session, tenant_id)
+    return await get_raioane_tree_by_tenants(session, [tenant_id])
+
+
+async def get_raioane_tree_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    raws = await get_raioane_by_tenants(session, tenant_ids)
     groups = [r for r in raws if r.get("parent_id") in (None, 0)]
     children_by_parent: dict[UUID, list[dict[str, Any]]] = {}
     for r in raws:
@@ -142,22 +162,35 @@ async def delete_raion(
 # ── Brands CRUD ─────────────────────────────────────────────────────────────
 
 async def get_brands(session: AsyncSession, tenant_id: UUID) -> list[dict[str, Any]]:
+    return await get_brands_by_tenants(session, [tenant_id])
+
+
+async def get_brands_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     rows = (await session.execute(
         select(FacingBrand)
-        .where(FacingBrand.tenant_id == tenant_id)
+        .where(FacingBrand.tenant_id.in_(tenant_ids))
         .order_by(FacingBrand.sort_order)
     )).scalars().all()
-    return [
-        {
+    # Dedupe pe nume — păstrăm prima ocurență
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for b in rows:
+        if b.name in seen:
+            continue
+        seen.add(b.name)
+        out.append({
             "id": b.id,
             "name": b.name,
             "color": b.color,
             "is_own": b.is_own,
             "sort_order": b.sort_order,
             "active": b.active,
-        }
-        for b in rows
-    ]
+        })
+    return out
 
 
 async def update_brand(
@@ -225,13 +258,26 @@ async def delete_brand(
 async def get_chain_brands(
     session: AsyncSession, tenant_id: UUID,
 ) -> dict[str, list[UUID]]:
+    return await get_chain_brands_by_tenants(session, [tenant_id])
+
+
+async def get_chain_brands_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> dict[str, list[UUID]]:
+    if not tenant_ids:
+        return {ch: [] for ch in DEFAULT_CHAINS}
     rows = (await session.execute(
         select(FacingChainBrand.chain, FacingChainBrand.brand_id)
-        .where(FacingChainBrand.tenant_id == tenant_id)
+        .where(FacingChainBrand.tenant_id.in_(tenant_ids))
         .order_by(FacingChainBrand.chain, FacingChainBrand.sort_order)
     )).all()
     out: dict[str, list[UUID]] = {ch: [] for ch in DEFAULT_CHAINS}
+    seen: set[tuple[str, UUID]] = set()
     for ch, bid in rows:
+        key = (ch, bid)
+        if key in seen:
+            continue
+        seen.add(key)
         out.setdefault(ch, []).append(bid)
     return out
 
@@ -274,12 +320,18 @@ async def set_chain_brands_bulk(
 # ── Store list ───────────────────────────────────────────────────────────────
 
 async def get_stores(session: AsyncSession, tenant_id: UUID) -> list[str]:
-    """cheie_finala unice din store_agent_mappings (echivalent cu
-    `unified_store_agent_map` din legacy)."""
+    return await get_stores_by_tenants(session, [tenant_id])
+
+
+async def get_stores_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[str]:
+    if not tenant_ids:
+        return []
     rows = (await session.execute(
         select(StoreAgentMapping.cheie_finala)
         .where(
-            StoreAgentMapping.tenant_id == tenant_id,
+            StoreAgentMapping.tenant_id.in_(tenant_ids),
             StoreAgentMapping.cheie_finala.is_not(None),
             StoreAgentMapping.cheie_finala != "",
             ~func.upper(StoreAgentMapping.client_original).like("%PUSKIN%"),
@@ -554,6 +606,17 @@ async def get_snapshots(
     session: AsyncSession, tenant_id: UUID,
     store_name: str | None = None, luna: str | None = None,
 ) -> list[dict[str, Any]]:
+    return await get_snapshots_by_tenants(
+        session, [tenant_id], store_name=store_name, luna=luna,
+    )
+
+
+async def get_snapshots_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+    store_name: str | None = None, luna: str | None = None,
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     stmt = (
         select(
             FacingSnapshot.id, FacingSnapshot.store_name,
@@ -565,7 +628,7 @@ async def get_snapshots(
         )
         .join(FacingRaion, FacingRaion.id == FacingSnapshot.raion_id)
         .join(FacingBrand, FacingBrand.id == FacingSnapshot.brand_id)
-        .where(FacingSnapshot.tenant_id == tenant_id)
+        .where(FacingSnapshot.tenant_id.in_(tenant_ids))
     )
     if store_name:
         stmt = stmt.where(FacingSnapshot.store_name == store_name)
@@ -592,6 +655,17 @@ async def get_evolution(
     session: AsyncSession, tenant_id: UUID,
     store_name: str | None = None, raion_id: UUID | None = None,
 ) -> list[dict[str, Any]]:
+    return await get_evolution_by_tenants(
+        session, [tenant_id], store_name=store_name, raion_id=raion_id,
+    )
+
+
+async def get_evolution_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+    store_name: str | None = None, raion_id: UUID | None = None,
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     stmt = (
         select(
             FacingSnapshot.luna, FacingSnapshot.store_name,
@@ -602,7 +676,7 @@ async def get_evolution(
         )
         .join(FacingRaion, FacingRaion.id == FacingSnapshot.raion_id)
         .join(FacingBrand, FacingBrand.id == FacingSnapshot.brand_id)
-        .where(FacingSnapshot.tenant_id == tenant_id)
+        .where(FacingSnapshot.tenant_id.in_(tenant_ids))
     )
     if store_name:
         stmt = stmt.where(FacingSnapshot.store_name == store_name)
@@ -641,11 +715,30 @@ def _extract_chain(store_name: str | None) -> str:
 async def get_dashboard_summary(
     session: AsyncSession, tenant_id: UUID, luna: str | None = None,
 ) -> dict[str, Any]:
-    """Port 1:1 al `get_dashboard_summary` din legacy facing_service.py."""
+    return await get_dashboard_summary_by_tenants(session, [tenant_id], luna=luna)
+
+
+async def get_dashboard_summary_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], luna: str | None = None,
+) -> dict[str, Any]:
+    """Multi-tenant variant — agregare cross-org pentru dashboard."""
+    if not tenant_ids:
+        return {
+            "luna": luna or datetime.now().strftime("%Y-%m"),
+            "prev_luna": "",
+            "chains": [], "total_chains": 0,
+            "global_total_fete": 0, "global_own_total_fete": 0,
+            "global_own_pct_weighted": 0, "global_prev_own_pct_weighted": 0,
+            "global_own_pct_delta": 0,
+            "global_own_pct_arith": 0, "global_prev_own_pct_arith": 0,
+            "global_own_pct_arith_delta": 0,
+            "global_stores_counted_arith": 0,
+            "global_competitors": [], "total_magazine": 0,
+        }
     if not luna:
         mx = (await session.execute(
             select(func.max(FacingSnapshot.luna))
-            .where(FacingSnapshot.tenant_id == tenant_id)
+            .where(FacingSnapshot.tenant_id.in_(tenant_ids))
         )).scalar_one_or_none()
         luna = mx if mx else datetime.now().strftime("%Y-%m")
 
@@ -669,7 +762,7 @@ async def get_dashboard_summary(
         .join(FacingRaion, FacingRaion.id == FacingSnapshot.raion_id)
         .join(FacingBrand, FacingBrand.id == FacingSnapshot.brand_id)
         .where(
-            FacingSnapshot.tenant_id == tenant_id,
+            FacingSnapshot.tenant_id.in_(tenant_ids),
             FacingSnapshot.luna == luna,
         )
         .order_by(
@@ -687,7 +780,7 @@ async def get_dashboard_summary(
             func.sum(FacingSnapshot.nr_fete).label("total_fete"),
         )
         .where(
-            FacingSnapshot.tenant_id == tenant_id,
+            FacingSnapshot.tenant_id.in_(tenant_ids),
             FacingSnapshot.luna == prev_luna,
         )
         .group_by(FacingSnapshot.store_name, FacingSnapshot.brand_id)
@@ -695,19 +788,19 @@ async def get_dashboard_summary(
 
     chain_brand_set = {
         ch: set(bids) for ch, bids in
-        (await get_chain_brands(session, tenant_id)).items()
+        (await get_chain_brands_by_tenants(session, tenant_ids)).items()
     }
 
     own_rows = (await session.execute(
         select(FacingBrand.id, FacingBrand.is_own)
-        .where(FacingBrand.tenant_id == tenant_id)
+        .where(FacingBrand.tenant_id.in_(tenant_ids))
     )).all()
     own_map = {r[0]: int(bool(r[1])) for r in own_rows}
 
     # Pentru brand_info lookup (când brand e doar în prev_rows)
     brand_info_rows = (await session.execute(
         select(FacingBrand.id, FacingBrand.name, FacingBrand.color, FacingBrand.sort_order)
-        .where(FacingBrand.tenant_id == tenant_id)
+        .where(FacingBrand.tenant_id.in_(tenant_ids))
     )).all()
     brand_info = {r[0]: {"name": r[1], "color": r[2], "sort_order": r[3]} for r in brand_info_rows}
 
@@ -1053,9 +1146,17 @@ async def get_dashboard_summary(
 async def get_available_months(
     session: AsyncSession, tenant_id: UUID,
 ) -> list[str]:
+    return await get_available_months_by_tenants(session, [tenant_id])
+
+
+async def get_available_months_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[str]:
+    if not tenant_ids:
+        return []
     rows = (await session.execute(
         select(FacingSnapshot.luna)
-        .where(FacingSnapshot.tenant_id == tenant_id)
+        .where(FacingSnapshot.tenant_id.in_(tenant_ids))
         .distinct()
         .order_by(FacingSnapshot.luna.desc())
     )).all()
@@ -1078,6 +1179,14 @@ _SCOPE_OWN_NAME: dict[str, str] = {
 async def get_raion_competitors_matrix(
     session: AsyncSession, tenant_id: UUID,
 ) -> list[dict[str, Any]]:
+    return await get_raion_competitors_matrix_by_tenants(session, [tenant_id])
+
+
+async def get_raion_competitors_matrix_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     rows = (await session.execute(
         select(
             FacingRaionCompetitor.raion_id,
@@ -1085,7 +1194,7 @@ async def get_raion_competitors_matrix(
             FacingRaionCompetitor.competitor_brand_id,
             FacingRaionCompetitor.sort_order,
         )
-        .where(FacingRaionCompetitor.tenant_id == tenant_id)
+        .where(FacingRaionCompetitor.tenant_id.in_(tenant_ids))
         .order_by(
             FacingRaionCompetitor.own_brand_id,
             FacingRaionCompetitor.raion_id,
@@ -1378,25 +1487,42 @@ async def get_raion_share(
     scope: str,
     luna: str | None = None,
 ) -> dict[str, Any]:
-    """Cota-parte fețe per sub-raion. Citește matricea `facing_raion_competitors`
-    pentru a decide ce concurenți arată pentru fiecare (own_brand, sub_raion).
-    Pentru scope=sikadp returnează AMBELE analize (Adeplast + Sika).
+    return await get_raion_share_by_tenants(
+        session, [tenant_id], scope=scope, luna=luna,
+    )
+
+
+async def get_raion_share_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    scope: str,
+    luna: str | None = None,
+) -> dict[str, Any]:
+    """Cota-parte fețe per sub-raion (multi-org).
+
+    Citește matricea `facing_raion_competitors` pentru a decide ce concurenți
+    arată pentru fiecare (own_brand, sub_raion). Pentru scope=sikadp returnează
+    AMBELE analize (Adeplast + Sika).
     """
     if scope not in {"adp", "sika", "sikadp"}:
         raise ValueError(f"Scope invalid: {scope}")
+
+    if not tenant_ids:
+        return {"luna": luna or "", "requested_scope": scope, "analyses": []}
 
     # Luna default = cea mai recentă cu date
     if not luna:
         mx = (await session.execute(
             select(func.max(FacingSnapshot.luna))
-            .where(FacingSnapshot.tenant_id == tenant_id)
+            .where(FacingSnapshot.tenant_id.in_(tenant_ids))
         )).scalar_one_or_none()
         luna = mx if mx else datetime.now().strftime("%Y-%m")
 
     # Arbore raioane (full)
     raioane_rows = (await session.execute(
         select(FacingRaion)
-        .where(FacingRaion.tenant_id == tenant_id, FacingRaion.active.is_(True))
+        .where(FacingRaion.tenant_id.in_(tenant_ids), FacingRaion.active.is_(True))
         .order_by(FacingRaion.sort_order)
     )).scalars().all()
     children_by_parent: dict[UUID, list[Any]] = {}
@@ -1410,7 +1536,7 @@ async def get_raion_share(
     own_brand_rows = (await session.execute(
         select(FacingBrand)
         .where(
-            FacingBrand.tenant_id == tenant_id,
+            FacingBrand.tenant_id.in_(tenant_ids),
             FacingBrand.name.in_(own_names),
         )
     )).scalars().all()
@@ -1435,7 +1561,7 @@ async def get_raion_share(
             FacingBrand.id == FacingRaionCompetitor.competitor_brand_id,
         )
         .where(
-            FacingRaionCompetitor.tenant_id == tenant_id,
+            FacingRaionCompetitor.tenant_id.in_(tenant_ids),
             FacingRaionCompetitor.own_brand_id.in_(own_ids),
         )
     )).all()
@@ -1472,7 +1598,7 @@ async def get_raion_share(
         )
         .join(FacingBrand, FacingBrand.id == FacingSnapshot.brand_id)
         .where(
-            FacingSnapshot.tenant_id == tenant_id,
+            FacingSnapshot.tenant_id.in_(tenant_ids),
             FacingSnapshot.luna == luna,
             FacingSnapshot.raion_id.in_(relevant_sub_ids),
         )

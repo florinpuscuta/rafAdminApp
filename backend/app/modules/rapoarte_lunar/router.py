@@ -29,6 +29,7 @@ async def get_raport_lunar(
     tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> RaportLunarResponse:
+    """Raport lunar per orga activa (resolved via X-Active-Org-Id header)."""
     now = datetime.now(timezone.utc)
     y = year or now.year
     # Dacă nu e lună specificată, folosim luna curentă (cu fallback pe

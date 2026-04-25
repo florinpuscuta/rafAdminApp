@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id, get_current_user
+from app.modules.auth.deps import get_current_org_ids, get_current_tenant_id, get_current_user
 from app.modules.parcurs import service as svc
 from app.modules.parcurs.schemas import (
     ParcursAgentOption,
@@ -46,11 +46,11 @@ def _check_scope(scope: str) -> str:
 @router.get("/agents", response_model=ParcursAgentsResponse)
 async def get_agents(
     scope: str = Query("adp"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = _check_scope(scope)
-    agents = await svc.list_agents(session, tenant_id, scope=scope)
+    agents = await svc.list_agents_by_tenants(session, org_ids, scope=scope)
     return ParcursAgentsResponse(
         scope=scope,
         agents=[ParcursAgentOption(**a) for a in agents],
@@ -61,12 +61,12 @@ async def get_agents(
 async def get_stores(
     scope: str = Query("adp"),
     agent: str = Query(..., min_length=1),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = _check_scope(scope)
-    stores = await svc.list_stores_for_agent(
-        session, tenant_id, scope=scope, agent_name=agent,
+    stores = await svc.list_stores_for_agent_by_tenants(
+        session, org_ids, scope=scope, agent_name=agent,
     )
     return ParcursStoresResponse(
         scope=scope,
@@ -92,11 +92,11 @@ async def generate(
 @router.get("/sheets", response_model=ParcursSheetsListResponse)
 async def list_sheets(
     scope: str = Query("adp"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = _check_scope(scope)
-    sheets = await svc.list_sheets(session, tenant_id, scope=scope)
+    sheets = await svc.list_sheets_by_tenants(session, org_ids, scope=scope)
     return ParcursSheetsListResponse(
         scope=scope,
         sheets=[ParcursSheetSummary(**s) for s in sheets],

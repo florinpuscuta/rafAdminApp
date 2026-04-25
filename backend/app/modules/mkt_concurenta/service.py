@@ -60,43 +60,50 @@ def _parse_folder_key(name: str) -> tuple[int, int] | None:
 async def list_year(
     session: AsyncSession, tenant_id: UUID, year: int
 ) -> dict[str, Any]:
-    """
-    Grid de 12 luni pentru un an.
+    """Wrapper single-tenant — vezi `list_year_by_tenants`."""
+    return await list_year_by_tenants(session, [tenant_id], year)
 
-    Oglinda buclei `for (let m = 1; m <= 12; m++)` din legacy:
-      - dacă folder există → count + cover (primul file); altfel count=0, cover=null
-      - `is_future = year > curYear || (year == curYear && m > curMonth)`
+
+async def list_year_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], year: int,
+) -> dict[str, Any]:
+    """Grid de 12 luni pentru un an, agregat pe mai multe tenants.
+
+    Pentru fiecare lună:
+      - count = suma poze din toate org-urile
+      - folder_id / cover_url = primele găsite (random org dacă există)
     """
     now = datetime.now()
     cur_year, cur_month = now.year, now.month
 
-    pairs = await gallery_svc.list_folders(session, tenant_id, type_=GALLERY_TYPE)
-
-    # Map "YYYY_MM" -> (folder, count)
-    folder_map: dict[str, tuple[GalleryFolder, int]] = {}
-    for folder, count in pairs:
-        parsed = _parse_folder_key(folder.name)
-        if parsed is None:
-            continue
-        fy, fm = parsed
-        if fy == year:
-            folder_map[folder.name] = (folder, count)
+    # Map "YYYY_MM" -> [(folder, count, tenant_id), ...]
+    folder_map: dict[str, list[tuple[GalleryFolder, int, UUID]]] = {}
+    for tid in tenant_ids:
+        pairs = await gallery_svc.list_folders(session, tid, type_=GALLERY_TYPE)
+        for folder, count in pairs:
+            parsed = _parse_folder_key(folder.name)
+            if parsed is None:
+                continue
+            fy, _fm = parsed
+            if fy == year:
+                folder_map.setdefault(folder.name, []).append((folder, count, tid))
 
     cells: list[dict[str, Any]] = []
     for m in range(1, 13):
         key = _folder_key(year, m)
-        pair = folder_map.get(key)
+        entries = folder_map.get(key, [])
         folder_id: UUID | None = None
-        count = 0
+        total_count = 0
         cover_url: str | None = None
-        if pair is not None:
-            folder, count = pair
-            folder_id = folder.id
-            # Cover = primul file sortat alfabetic (legacy: `sorted(imgs)[0]`)
-            photos = await gallery_svc.list_photos(session, tenant_id, folder.id)
-            if photos:
-                first = sorted(photos, key=lambda p: p.filename)[0]
-                cover_url = gallery_svc.photo_url(first)
+        for folder, count, tid in entries:
+            total_count += count
+            if folder_id is None:
+                folder_id = folder.id
+            if cover_url is None:
+                photos = await gallery_svc.list_photos(session, tid, folder.id)
+                if photos:
+                    first = sorted(photos, key=lambda p: p.filename)[0]
+                    cover_url = gallery_svc.photo_url(first)
         is_future = year > cur_year or (year == cur_year and m > cur_month)
         cells.append(
             {
@@ -104,7 +111,7 @@ async def list_year(
                 "folder_key": key,
                 "label": MONTH_LABELS_FULL[m],
                 "folder_id": folder_id,
-                "count": count,
+                "count": total_count,
                 "cover_url": cover_url,
                 "is_future": is_future,
             }
@@ -131,13 +138,27 @@ async def ensure_folder(
 async def get_folder_by_key(
     session: AsyncSession, tenant_id: UUID, folder_key: str
 ) -> GalleryFolder | None:
-    """Rezolvă folder după „YYYY_MM"."""
+    """Rezolvă folder după „YYYY_MM" — single tenant."""
     if _parse_folder_key(folder_key) is None:
         return None
     pairs = await gallery_svc.list_folders(session, tenant_id, type_=GALLERY_TYPE)
     for folder, _ in pairs:
         if folder.name == folder_key:
             return folder
+    return None
+
+
+async def get_folder_by_key_in_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], folder_key: str,
+) -> tuple[GalleryFolder, UUID] | None:
+    """Caută folder după „YYYY_MM" în lista de tenants. Returnează (folder, owner_tenant_id)."""
+    if _parse_folder_key(folder_key) is None:
+        return None
+    for tid in tenant_ids:
+        pairs = await gallery_svc.list_folders(session, tid, type_=GALLERY_TYPE)
+        for folder, _ in pairs:
+            if folder.name == folder_key:
+                return folder, tid
     return None
 
 

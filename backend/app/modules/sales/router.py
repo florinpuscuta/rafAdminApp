@@ -6,7 +6,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id, get_current_user
+from app.modules.auth.deps import (
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from fastapi import Request
 
 import asyncio
@@ -44,11 +48,11 @@ async def list_sales(
     agent_id: UUID | None = Query(None, alias="agentId"),
     product_id: UUID | None = Query(None, alias="productId"),
     year: int | None = Query(None),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    items, total = await sales_service.list_by_tenant(
-        session, tenant_id,
+    items, total = await sales_service.list_by_tenants(
+        session, org_ids,
         page=page, page_size=page_size,
         store_id=store_id, agent_id=agent_id, product_id=product_id, year=year,
     )
@@ -292,10 +296,10 @@ async def import_sales_async(
 async def get_import_job(
     job_id: UUID,
     current_user: User = Depends(get_current_user),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
 ):
     job = sales_jobs.get_job(job_id)
-    if job is None or job.tenant_id != tenant_id:
+    if job is None or job.tenant_id not in org_ids:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "job_not_found", "message": "Job inexistent"},
@@ -357,7 +361,7 @@ async def backfill_fks(
 async def export_sales(
     year: int | None = None,
     month: int | None = None,
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     """Returnează un .xlsx cu toate raw_sales filtrate (year/month opțional)."""
@@ -365,8 +369,8 @@ async def export_sales(
     from fastapi.responses import StreamingResponse
     from openpyxl import Workbook
 
-    rows = await sales_service.list_all_by_tenant(
-        session, tenant_id, year=year, month=month
+    rows = await sales_service.list_all_by_tenants(
+        session, org_ids, year=year, month=month
     )
 
     wb = Workbook()
@@ -407,10 +411,10 @@ async def export_sales(
 
 @router.get("/batches", response_model=list[ImportBatchOut])
 async def list_batches(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    batches = await sales_service.list_batches(session, tenant_id)
+    batches = await sales_service.list_batches_by_tenants(session, org_ids)
     return [ImportBatchOut.model_validate(b) for b in batches]
 
 
@@ -419,10 +423,16 @@ async def delete_batch(
     request: Request,
     batch_id: UUID,
     current_user: User = Depends(get_current_user),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    deleted = await sales_service.delete_batch(session, tenant_id, batch_id)
+    deleted = None
+    owner_tenant = None
+    for tid in org_ids:
+        deleted = await sales_service.delete_batch(session, tid, batch_id)
+        if deleted is not None:
+            owner_tenant = tid
+            break
     if deleted is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -431,7 +441,7 @@ async def delete_batch(
     await audit_service.log_event(
         session,
         event_type="sales.batch_deleted",
-        tenant_id=tenant_id,
+        tenant_id=owner_tenant,
         user_id=current_user.id,
         target_type="import_batch",
         target_id=batch_id,

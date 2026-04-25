@@ -49,6 +49,10 @@ class Promotion(Base):
     # client_filter: lista de client_canonical (ex: ["DEDEMAN SRL", "LEROY MERLIN ROMANIA SRL"])
     # null sau lista goala = se aplica la toti clientii KA
     client_filter: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    # manual_quantities: {product_id_str: qty_decimal_str} — estimari editate de
+    # user pentru simulare. Lipsa cheii = se foloseste cantitatea baseline (YoY/MoM).
+    # Folosim string pentru qty ca sa pastram precizia (Decimal -> str -> Decimal).
+    manual_quantities: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),

@@ -13,7 +13,7 @@ from app.modules.ai.schemas import (
     SendMessageRequest,
     SendMessageResponse,
 )
-from app.modules.auth.deps import get_current_user
+from app.modules.auth.deps import get_current_org_ids, get_current_user
 from app.modules.users.models import User
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -21,10 +21,10 @@ router = APIRouter(prefix="/api/ai", tags=["ai"])
 
 @router.get("/conversations", response_model=list[ConversationOut])
 async def list_conversations(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    convs = await ai_service.list_conversations(session, current_user.tenant_id)
+    convs = await ai_service.list_conversations(session, org_ids)
     return [ConversationOut.model_validate(c) for c in convs]
 
 
@@ -50,10 +50,10 @@ async def create_conversation(
 @router.delete("/conversations/{conv_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_conversation(
     conv_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    conv = await ai_service.get_conversation(session, current_user.tenant_id, conv_id)
+    conv = await ai_service.get_conversation(session, org_ids, conv_id)
     if conv is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -66,10 +66,10 @@ async def delete_conversation(
 @router.get("/conversations/{conv_id}/messages", response_model=list[MessageOut])
 async def list_messages(
     conv_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    conv = await ai_service.get_conversation(session, current_user.tenant_id, conv_id)
+    conv = await ai_service.get_conversation(session, org_ids, conv_id)
     if conv is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -85,17 +85,17 @@ async def list_messages(
 async def send_message(
     conv_id: UUID,
     payload: SendMessageRequest,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    conv = await ai_service.get_conversation(session, current_user.tenant_id, conv_id)
+    conv = await ai_service.get_conversation(session, org_ids, conv_id)
     if conv is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "not_found", "message": "Conversație inexistentă"},
         )
     user_msg, asst_msg, provider = await ai_service.send_message(
-        session, conv, payload.content
+        session, conv, payload.content, tenant_ids=org_ids,
     )
     return SendMessageResponse(
         user_message=MessageOut.model_validate(user_msg),

@@ -5,7 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids
 from app.modules.eps import service as eps_service
 from app.modules.eps.schemas import (
     EpsBreakdownResponse, EpsClassRow, EpsDetailsResponse, EpsMonthlyRow,
@@ -37,7 +37,7 @@ async def eps_details(
         None,
         description="CSV de luni 1..12, ex: '1,2,3'. Gol = toate lunile.",
     ),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     if y1 == y2:
@@ -46,8 +46,8 @@ async def eps_details(
             detail={"code": "invalid_years", "message": "y1 și y2 trebuie să difere"},
         )
     months_list = _parse_months(months)
-    rows = await eps_service.details_by_month(
-        session, tenant_id, y1=y1, y2=y2, months=months_list
+    rows = await eps_service.details_by_month_by_tenants(
+        session, org_ids, y1=y1, y2=y2, months=months_list
     )
     return EpsDetailsResponse(
         y1=y1,
@@ -61,7 +61,7 @@ async def eps_breakdown(
     y1: int = Query(..., ge=2000, le=2100),
     y2: int = Query(..., ge=2000, le=2100),
     months: str | None = Query(None),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     """Breakdown EPS KA pe clase (50/70/80/100/120/150/200) — plăci only."""
@@ -71,8 +71,8 @@ async def eps_breakdown(
             detail={"code": "invalid_years", "message": "y1 și y2 trebuie să difere"},
         )
     months_list = _parse_months(months)
-    rows = await eps_service.breakdown_by_class(
-        session, tenant_id, y1=y1, y2=y2, months=months_list,
+    rows = await eps_service.breakdown_by_class_by_tenants(
+        session, org_ids, y1=y1, y2=y2, months=months_list,
     )
     return EpsBreakdownResponse(
         y1=y1, y2=y2,

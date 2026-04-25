@@ -70,37 +70,48 @@ CONVENȚII:
 """
 
 
-SYSTEM_PROMPT = (
-    "Ești un asistent AI specializat pe date de vânzări și operațiuni "
-    "comerciale pentru Adeplast / Sika (platforma SaaS Raf-AdminApp). "
-    "Răspunzi în română, clar și concis. Toate cifrele să fie corecte — "
-    "atunci când nu ești sigur, INTEROGHEAZĂ baza de date prin tool-uri "
-    "în loc să ghicești.\n\n"
-    "TOOL-URI DISPONIBILE:\n"
-    "- `query_db(sql)` — citire (SELECT/WITH).\n"
-    "- `propose_write(sql)` — propune o modificare (INSERT/UPDATE/DELETE), "
-    "face dry-run, întoarce un TOKEN. NU modifică încă nimic.\n"
-    "- `execute_write(token)` — commit-uie modificarea propusă. SE CHEAMĂ "
-    "DOAR DUPĂ ce utilizatorul confirmă explicit în chat (ex: 'da', 'execută').\n"
-    "- `remember(key, value)` — salvează o preferință / context persistent "
-    "tenant-wide (ex: anul implicit, scope-ul preferat, terminologie). "
-    "Se încarcă automat în prompt la fiecare conversație nouă.\n"
-    "- `forget(key)` — șterge o memorie persistentă.\n\n"
-    "REGULI:\n"
-    "1. Pentru cifre / liste / clasamente / comparații: folosește `query_db`. "
-    "Nu inventa numere.\n"
-    "2. Include MEREU `tenant_id = '<uuid-ul curent>'` (vezi mai jos) în "
-    "WHERE pentru orice tabelă cu tenant_id (read SAU write).\n"
-    "3. Pattern de scriere OBLIGATORIU: (a) `propose_write` întâi, "
-    "(b) raportează utilizatorului ce ai propus + numărul de rânduri "
-    "afectate + token-ul, (c) AȘTEAPTĂ confirmarea, (d) abia apoi "
-    "`execute_write`. Niciodată să nu execuți fără confirmare.\n"
-    "4. Dacă un query întoarce 0 rânduri, încearcă variantă (alt an, "
-    "filtru mai lax). Nu te opri la primul rezultat gol.\n"
-    "5. Verifică schema cu `information_schema.columns` dacă ai nevoie.\n"
-    "6. Max 200 rânduri pe read — folosește GROUP BY pentru date mari.\n\n"
-    f"{SCHEMA_HINT}"
-)
+def _build_system_prompt() -> str:
+    """Build dinamic ca să includă lista view-urilor disponibile."""
+    from app.modules.ai.app_views import list_view_descriptions
+    return (
+        "Ești un asistent AI specializat pe date de vânzări și operațiuni "
+        "comerciale pentru Adeplast / Sika (platforma SaaS Raf-AdminApp). "
+        "Răspunzi în română, clar și concis. Toate cifrele să fie corecte — "
+        "atunci când nu ești sigur, INTEROGHEAZĂ baza de date prin tool-uri "
+        "în loc să ghicești.\n\n"
+        "ACCESS: READ-ONLY. Poți citi orice tabelă (mai puțin credențiale: "
+        "api_keys, app_settings, *_tokens). NU poți face INSERT/UPDATE/DELETE — "
+        "tool-urile de scriere au fost dezactivate intenționat.\n\n"
+        "TOOL-URI DISPONIBILE:\n"
+        "- `get_app_view(view_name, params)` — apelează un VIEW al aplicației "
+        "și întoarce EXACT ce afișează pagina UI (cu toată logica de business: "
+        "alocări discount, dedup surse, monthly costs). FOLOSEȘTE PRIMUL când "
+        "user-ul întreabă despre o pagină / meniu specific.\n"
+        "- `query_db(sql)` — SQL SELECT raw. Folosește când view-urile nu "
+        "acoperă întrebarea (ex. exploratorie, ad-hoc, info de schemă).\n"
+        "- `remember(key, value)` — salvează o preferință / context persistent.\n"
+        "- `forget(key)` — șterge o memorie persistentă.\n\n"
+        "VIEW-URI DISPONIBILE (pentru `get_app_view`):\n"
+        f"{list_view_descriptions()}\n\n"
+        "STRATEGIE:\n"
+        "1. Întrebare despre meniu / cifră specifică din UI → `get_app_view`. "
+        "Numerele întoarse VOR fi identice cu cele din pagină.\n"
+        "2. Întrebare exploratorie / schema / ad-hoc → `query_db`.\n"
+        "3. Tenant filtering OBLIGATORIU pentru `query_db`: vezi mai jos lista "
+        "de UUID-uri autorizate. Single-tenant: `tenant_id = '<uuid>'`. "
+        "SIKADP multi-tenant: `tenant_id IN ('<uuid1>','<uuid2>')` pe TOATE "
+        "tabelele cu tenant_id (raw_sales, import_batches, products, etc.).\n"
+        "4. Dacă un query întoarce 0 rânduri, încearcă variantă (alt an, "
+        "filtru mai lax). Nu te opri la primul rezultat gol.\n"
+        "5. Max 200 rânduri pe read — folosește GROUP BY pentru date mari.\n"
+        "6. Dacă user-ul cere modificări (delete/update/insert), explică-i "
+        "politicos că ești în mod read-only și că trebuie să folosească UI-ul "
+        "aplicației pentru schimbări de date.\n\n"
+        f"{SCHEMA_HINT}"
+    )
+
+
+SYSTEM_PROMPT = _build_system_prompt()
 
 
 PROVIDERS = {
@@ -114,9 +125,9 @@ PROVIDERS = {
     },
 }
 
-MAX_TOOL_ITERATIONS = 8
+MAX_TOOL_ITERATIONS = 40
 # Răspunsuri suficient de lungi pentru analize cu rezultate SQL în context.
-MAX_TOKENS = 8192
+MAX_TOKENS = 32768
 
 
 async def _effective_key(
@@ -134,32 +145,40 @@ async def _effective_key(
 async def _detect_provider(
     session: AsyncSession, tenant_id: UUID,
 ) -> str | None:
+    """Default = DeepSeek; override via env `AI_PROVIDER`. Fallback ordering
+    pune deepseek primul ca să fie preferat când avem mai multe chei configurate.
+    """
     if settings.ai_provider and settings.ai_provider in PROVIDERS:
         if await _effective_key(session, tenant_id, settings.ai_provider):
             return settings.ai_provider
-    for name in ("anthropic", "openai", "xai", "deepseek"):
+    for name in ("deepseek", "anthropic", "openai", "xai"):
         if await _effective_key(session, tenant_id, name):
             return name
     return None
 
 
 async def list_conversations(
-    session: AsyncSession, tenant_id: UUID
+    session: AsyncSession, tenant_ids: list[UUID]
 ) -> list[AIConversation]:
+    if not tenant_ids:
+        return []
     stmt = (
         select(AIConversation)
-        .where(AIConversation.tenant_id == tenant_id)
+        .where(AIConversation.tenant_id.in_(tenant_ids))
         .order_by(AIConversation.updated_at.desc())
     )
     return list((await session.execute(stmt)).scalars().all())
 
 
 async def get_conversation(
-    session: AsyncSession, tenant_id: UUID, conv_id: UUID
+    session: AsyncSession, tenant_ids: list[UUID], conv_id: UUID
 ) -> AIConversation | None:
+    if not tenant_ids:
+        return None
     result = await session.execute(
         select(AIConversation).where(
-            AIConversation.id == conv_id, AIConversation.tenant_id == tenant_id
+            AIConversation.id == conv_id,
+            AIConversation.tenant_id.in_(tenant_ids),
         )
     )
     return result.scalar_one_or_none()
@@ -199,13 +218,30 @@ async def list_messages(
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def _system_prompt_for(session: AsyncSession, tenant_id: UUID) -> str:
-    """System prompt = bază + UUID tenant + memoria persistentă încărcată."""
-    base = (
-        SYSTEM_PROMPT
-        + f"\n\nUUID-UL TENANT-ULUI CURENT (folosește-l în WHERE): {tenant_id}\n"
-    )
-    memories = await list_memories(session, tenant_id)
+async def _system_prompt_for(
+    session: AsyncSession, tenant_ids: list[UUID]
+) -> str:
+    """System prompt = bază + lista de UUID-uri autorizate + memoria persistentă."""
+    if len(tenant_ids) == 1:
+        tenant_clause = (
+            f"\n\nUUID-UL TENANT-ULUI CURENT (folosește-l în WHERE): {tenant_ids[0]}\n"
+            f"Filtru recomandat: `tenant_id = '{tenant_ids[0]}'`\n"
+        )
+    else:
+        ids_in = ", ".join(f"'{t}'" for t in tenant_ids)
+        ids_list = ", ".join(str(t) for t in tenant_ids)
+        tenant_clause = (
+            f"\n\nUUID-URI AUTORIZATE (mod consolidat SIKADP): {ids_list}\n"
+            f"Filtru OBLIGATORIU: `tenant_id IN ({ids_in})`\n"
+            "Aplică-l peste TOATE tabelele cu tenant_id (raw_sales, "
+            "import_batches, products, stores, agents, raw_orders, etc.). "
+            "Pentru rapoarte, agregă cu GROUP BY tenant_id când vrei să "
+            "diferențiezi între organizații; altfel suma totală e "
+            "consolidată cross-org.\n"
+        )
+    base = SYSTEM_PROMPT + tenant_clause
+    primary = tenant_ids[0] if tenant_ids else None
+    memories = await list_memories(session, primary) if primary else []
     if not memories:
         return base
     lines = "\n".join(f"- `{m['key']}`: {m['value']}" for m in memories)
@@ -224,7 +260,7 @@ async def _system_prompt_for(session: AsyncSession, tenant_id: UUID) -> str:
 # --------------------------------------------------------------------------
 async def _call_anthropic(
     session: AsyncSession,
-    tenant_id: UUID,
+    tenant_ids: list[UUID],
     history: list[AIMessage],
     user_content: str,
     *,
@@ -240,7 +276,7 @@ async def _call_anthropic(
     ]
     messages.append({"role": "user", "content": user_content})
 
-    system = await _system_prompt_for(session, tenant_id)
+    system = await _system_prompt_for(session, tenant_ids)
 
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = client.messages.create(
@@ -268,7 +304,7 @@ async def _call_anthropic(
                 "AI tool %s: %s", tool_name,
                 json.dumps(tool_input, ensure_ascii=False, default=str)[:200],
             )
-            result = await dispatch_tool(session, tenant_id, tool_name, tool_input)
+            result = await dispatch_tool(session, tenant_ids, tool_name, tool_input)
             tool_results.append({
                 "type": "tool_result",
                 "tool_use_id": block.id,
@@ -288,7 +324,7 @@ async def _call_anthropic(
 # --------------------------------------------------------------------------
 async def _call_openai_compat(
     session: AsyncSession,
-    tenant_id: UUID,
+    tenant_ids: list[UUID],
     history: list[AIMessage],
     user_content: str,
     *,
@@ -300,7 +336,7 @@ async def _call_openai_compat(
 
     client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
 
-    sys_prompt = await _system_prompt_for(session, tenant_id)
+    sys_prompt = await _system_prompt_for(session, tenant_ids)
     messages: list[dict] = [{"role": "system", "content": sys_prompt}]
     for m in history:
         if m.role in ("user", "assistant"):
@@ -344,7 +380,7 @@ async def _call_openai_compat(
                 "AI tool %s (%s): %s", tc.function.name, model,
                 json.dumps(args, ensure_ascii=False, default=str)[:200],
             )
-            result = await dispatch_tool(session, tenant_id, tc.function.name, args)
+            result = await dispatch_tool(session, tenant_ids, tc.function.name, args)
             messages.append({
                 "role": "tool",
                 "tool_call_id": tc.id,
@@ -359,7 +395,7 @@ async def _call_openai_compat(
 
 async def _call_llm(
     session: AsyncSession,
-    tenant_id: UUID,
+    tenant_ids: list[UUID],
     provider: str,
     history: list[AIMessage],
     user_content: str,
@@ -368,12 +404,12 @@ async def _call_llm(
 ) -> str:
     if provider == "anthropic":
         return await _call_anthropic(
-            session, tenant_id, history, user_content, api_key=api_key
+            session, tenant_ids, history, user_content, api_key=api_key
         )
     cfg = PROVIDERS[provider]
     return await _call_openai_compat(
         session,
-        tenant_id,
+        tenant_ids,
         history,
         user_content,
         api_key=api_key,
@@ -386,16 +422,21 @@ async def send_message(
     session: AsyncSession,
     conv: AIConversation,
     user_content: str,
+    tenant_ids: list[UUID] | None = None,
 ) -> tuple[AIMessage, AIMessage, str]:
     """
     Persistă mesajul user-ului, apelează providerul (cu tool use), persistă
-    răspunsul. Returnează (user_message, assistant_message, provider_name).
+    răspunsul. `tenant_ids` = toate organizațiile la care user-ul are acces
+    (pentru SIKADP consolidat); dacă None, se folosește doar org-ul conversației.
+    Returnează (user_message, assistant_message, provider_name).
     """
     history = await list_messages(session, conv.id)
 
     user_msg = AIMessage(conversation_id=conv.id, role="user", content=user_content)
     session.add(user_msg)
     await session.flush()
+
+    effective_tenant_ids = tenant_ids if tenant_ids else [conv.tenant_id]
 
     provider = await _detect_provider(session, conv.tenant_id)
     try:
@@ -412,7 +453,7 @@ async def send_message(
             api_key = await _effective_key(session, conv.tenant_id, provider)
             assert api_key is not None
             assistant_text = await _call_llm(
-                session, conv.tenant_id, provider, history, user_content,
+                session, effective_tenant_ids, provider, history, user_content,
                 api_key=api_key,
             )
     except Exception as exc:  # noqa: BLE001

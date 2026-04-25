@@ -26,11 +26,16 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_user
+from app.modules.auth.deps import (
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from app.modules.mkt_facing import service as svc
 from app.modules.mkt_facing.schemas import (
     BrandCreateBody,
@@ -65,25 +70,25 @@ router = APIRouter(prefix="/api/marketing/facing", tags=["marketing-facing"])
 
 @router.get("/config", response_model=ConfigResponse)
 async def api_config(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     return ConfigResponse.model_validate({
-        "raioane": await svc.get_raioane(session, current_user.tenant_id),
-        "raioane_tree": await svc.get_raioane_tree(session, current_user.tenant_id),
-        "brands": await svc.get_brands(session, current_user.tenant_id),
-        "chain_brands": await svc.get_chain_brands(session, current_user.tenant_id),
+        "raioane": await svc.get_raioane_by_tenants(session, org_ids),
+        "raioane_tree": await svc.get_raioane_tree_by_tenants(session, org_ids),
+        "brands": await svc.get_brands_by_tenants(session, org_ids),
+        "chain_brands": await svc.get_chain_brands_by_tenants(session, org_ids),
         "chains": svc.DEFAULT_CHAINS,
     })
 
 
 @router.get("/tree", response_model=TreeResponse)
 async def api_tree(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     return TreeResponse(
-        tree=await svc.get_raioane_tree(session, current_user.tenant_id),
+        tree=await svc.get_raioane_tree_by_tenants(session, org_ids),
     )
 
 
@@ -91,6 +96,7 @@ async def api_tree(
 async def api_migrate_month(
     body: MigrateMonthBody,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     luna = (body.luna or "").strip()
@@ -99,18 +105,18 @@ async def api_migrate_month(
             status.HTTP_400_BAD_REQUEST, detail={"ok": False, "error": "Luna lipseste"},
         )
     migrated, details = await svc.migrate_month_to_children(
-        session, current_user.tenant_id, luna, user=current_user.email or "",
+        session, tenant_id, luna, user=current_user.email or "",
     )
     return MigrateMonthResponse(migrated=migrated, details=details, luna=luna)
 
 
 @router.get("/chain-brands", response_model=ChainBrandsResponse)
 async def api_chain_brands_get(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     return ChainBrandsResponse(
-        chain_brands=await svc.get_chain_brands(session, current_user.tenant_id),
+        chain_brands=await svc.get_chain_brands_by_tenants(session, org_ids),
         chains=svc.DEFAULT_CHAINS,
     )
 
@@ -118,17 +124,17 @@ async def api_chain_brands_get(
 @router.post("/chain-brands", response_model=OkResponse)
 async def api_chain_brands_save(
     body: ChainBrandsSaveBody,
-    current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    await svc.set_chain_brands_bulk(session, current_user.tenant_id, body.matrix)
+    await svc.set_chain_brands_bulk(session, tenant_id, body.matrix)
     return OkResponse()
 
 
 @router.post("/raioane", response_model=OkResponse)
 async def api_raion_add(
     body: RaionCreateBody,
-    current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     name = (body.name or "").strip()
@@ -137,7 +143,7 @@ async def api_raion_add(
             status.HTTP_400_BAD_REQUEST,
             detail={"ok": False, "error": "Numele este obligatoriu"},
         )
-    await svc.add_raion(session, current_user.tenant_id, name, parent_id=body.parent_id)
+    await svc.add_raion(session, tenant_id, name, parent_id=body.parent_id)
     return OkResponse()
 
 
@@ -145,7 +151,7 @@ async def api_raion_add(
 async def api_raion_update(
     rid: UUID,
     body: RaionUpdateBody,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     name = (body.name or "").strip()
@@ -154,24 +160,47 @@ async def api_raion_update(
             status.HTTP_400_BAD_REQUEST,
             detail={"ok": False, "error": "Numele este obligatoriu"},
         )
-    await svc.update_raion(session, current_user.tenant_id, rid, name)
-    return OkResponse()
+    # Detect ownership first
+    for tid in org_ids:
+        existing = (await session.execute(
+            select(svc.FacingRaion).where(
+                svc.FacingRaion.tenant_id == tid, svc.FacingRaion.id == rid,
+            )
+        )).scalar_one_or_none()
+        if existing is not None:
+            await svc.update_raion(session, tid, rid, name)
+            return OkResponse()
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail={"ok": False, "error": "Raion inexistent"},
+    )
 
 
 @router.delete("/raioane/{rid}", response_model=OkResponse)
 async def api_raion_delete(
     rid: UUID,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    await svc.delete_raion(session, current_user.tenant_id, rid)
-    return OkResponse()
+    for tid in org_ids:
+        existing = (await session.execute(
+            select(svc.FacingRaion).where(
+                svc.FacingRaion.tenant_id == tid, svc.FacingRaion.id == rid,
+            )
+        )).scalar_one_or_none()
+        if existing is not None:
+            await svc.delete_raion(session, tid, rid)
+            return OkResponse()
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail={"ok": False, "error": "Raion inexistent"},
+    )
 
 
 @router.post("/brands", response_model=OkResponse)
 async def api_brand_add(
     body: BrandCreateBody,
-    current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     name = (body.name or "").strip()
@@ -180,7 +209,7 @@ async def api_brand_add(
             status.HTTP_400_BAD_REQUEST,
             detail={"ok": False, "error": "Numele este obligatoriu"},
         )
-    await svc.add_brand(session, current_user.tenant_id, name, body.color)
+    await svc.add_brand(session, tenant_id, name, body.color)
     return OkResponse()
 
 
@@ -188,7 +217,7 @@ async def api_brand_add(
 async def api_brand_update(
     bid: UUID,
     body: BrandUpdateBody,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     name = (body.name or "").strip()
@@ -197,26 +226,48 @@ async def api_brand_update(
             status.HTTP_400_BAD_REQUEST,
             detail={"ok": False, "error": "Numele este obligatoriu"},
         )
-    await svc.update_brand(session, current_user.tenant_id, bid, name, body.color)
-    return OkResponse()
+    for tid in org_ids:
+        existing = (await session.execute(
+            select(svc.FacingBrand).where(
+                svc.FacingBrand.tenant_id == tid, svc.FacingBrand.id == bid,
+            )
+        )).scalar_one_or_none()
+        if existing is not None:
+            await svc.update_brand(session, tid, bid, name, body.color)
+            return OkResponse()
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail={"ok": False, "error": "Brand inexistent"},
+    )
 
 
 @router.delete("/brands/{bid}", response_model=OkResponse)
 async def api_brand_delete(
     bid: UUID,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    await svc.delete_brand(session, current_user.tenant_id, bid)
-    return OkResponse()
+    for tid in org_ids:
+        existing = (await session.execute(
+            select(svc.FacingBrand).where(
+                svc.FacingBrand.tenant_id == tid, svc.FacingBrand.id == bid,
+            )
+        )).scalar_one_or_none()
+        if existing is not None:
+            await svc.delete_brand(session, tid, bid)
+            return OkResponse()
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail={"ok": False, "error": "Brand inexistent"},
+    )
 
 
 @router.get("/stores", response_model=StoresResponse)
 async def api_stores(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    return StoresResponse(stores=await svc.get_stores(session, current_user.tenant_id))
+    return StoresResponse(stores=await svc.get_stores_by_tenants(session, org_ids))
 
 
 @router.delete("/store", response_model=StoreDeleteResponse)
@@ -224,6 +275,7 @@ async def api_store_delete(
     name: str = Query(...),
     luna: str | None = Query(None),
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     name = (name or "").strip()
@@ -233,10 +285,12 @@ async def api_store_delete(
             detail={"ok": False, "error": "Numele magazinului lipsește"},
         )
     luna_clean = (luna or "").strip() or None
-    deleted = await svc.delete_store_snapshots(
-        session, current_user.tenant_id,
-        name, luna=luna_clean, user=current_user.email or "",
-    )
+    deleted = 0
+    for tid in org_ids:
+        deleted += await svc.delete_store_snapshots(
+            session, tid,
+            name, luna=luna_clean, user=current_user.email or "",
+        )
     return StoreDeleteResponse(
         deleted=deleted, store=name, luna=luna_clean,
     )
@@ -246,11 +300,11 @@ async def api_store_delete(
 async def api_snapshots(
     store: str | None = Query(None),
     luna: str | None = Query(None),
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    data = await svc.get_snapshots(
-        session, current_user.tenant_id, store_name=store, luna=luna,
+    data = await svc.get_snapshots_by_tenants(
+        session, org_ids, store_name=store, luna=luna,
     )
     return SnapshotsResponse(data=data)
 
@@ -259,6 +313,7 @@ async def api_snapshots(
 async def api_save(
     body: SaveBody,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     user = current_user.email or ""
@@ -269,14 +324,14 @@ async def api_save(
                 detail={"ok": False, "error": "Date incomplete"},
             )
         await svc.save_snapshot(
-            session, current_user.tenant_id,
+            session, tenant_id,
             body.store_name, body.raion_id, body.brand_id, body.luna,
             body.nr_fete or 0, user=user,
         )
         return SaveResponse(saved=1)
 
     count = await svc.save_bulk(
-        session, current_user.tenant_id,
+        session, tenant_id,
         [e.model_dump() for e in body.entries],
         user=user,
     )
@@ -287,11 +342,11 @@ async def api_save(
 async def api_evolution(
     store: str | None = Query(None),
     raion_id: UUID | None = Query(None),
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    data = await svc.get_evolution(
-        session, current_user.tenant_id,
+    data = await svc.get_evolution_by_tenants(
+        session, org_ids,
         store_name=store, raion_id=raion_id,
     )
     return EvolutionResponse(data=data)
@@ -300,40 +355,40 @@ async def api_evolution(
 @router.get("/dashboard", response_model=DashboardResponse)
 async def api_dashboard(
     luna: str | None = Query(None),
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    data = await svc.get_dashboard_summary(
-        session, current_user.tenant_id, luna=luna,
+    data = await svc.get_dashboard_summary_by_tenants(
+        session, org_ids, luna=luna,
     )
     return DashboardResponse.model_validate(data)
 
 
 @router.get("/months", response_model=MonthsResponse)
 async def api_months(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    return MonthsResponse(months=await svc.get_available_months(session, current_user.tenant_id))
+    return MonthsResponse(months=await svc.get_available_months_by_tenants(session, org_ids))
 
 
 @router.get("/raion-competitors", response_model=RaionCompetitorsMatrix)
 async def api_raion_competitors_get(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    entries = await svc.get_raion_competitors_matrix(session, current_user.tenant_id)
+    entries = await svc.get_raion_competitors_matrix_by_tenants(session, org_ids)
     return RaionCompetitorsMatrix(entries=entries)
 
 
 @router.post("/raion-competitors", response_model=OkResponse)
 async def api_raion_competitors_save(
     body: RaionCompetitorsSaveBody,
-    current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     await svc.set_raion_competitors_matrix(
-        session, current_user.tenant_id,
+        session, tenant_id,
         [e.model_dump() for e in body.entries],
     )
     return OkResponse()
@@ -343,7 +398,7 @@ async def api_raion_competitors_save(
 async def api_raion_share(
     scope: str = Query("adp", description="'adp' | 'sika' | 'sikadp'"),
     luna: str | None = Query(None, description="YYYY-MM; default = luna cea mai recentă"),
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = (scope or "adp").lower()
@@ -352,7 +407,7 @@ async def api_raion_share(
             status.HTTP_400_BAD_REQUEST,
             detail={"ok": False, "error": "Scope trebuie să fie 'adp', 'sika' sau 'sikadp'"},
         )
-    data = await svc.get_raion_share(
-        session, current_user.tenant_id, scope=scope, luna=luna,
+    data = await svc.get_raion_share_by_tenants(
+        session, org_ids, scope=scope, luna=luna,
     )
     return RaionShareResponse.model_validate(data)

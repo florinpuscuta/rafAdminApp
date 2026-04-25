@@ -64,14 +64,33 @@ async def get_probleme(
     year: int,
     month: int,
 ) -> dict[str, Any]:
+    return await get_probleme_by_tenants(
+        session, [tenant_id], scope=scope, year=year, month=month,
+    )
+
+
+async def get_probleme_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    scope: str,
+    year: int,
+    month: int,
+) -> dict[str, Any]:
+    """Multi-org: in SIKADP intoarce primul rand existent (toate orgele
+    partajeaza aceeasi inregistrare logica per scope)."""
+    if not tenant_ids:
+        return _to_dict(None, scope=scope, year=year, month=month)
     row = (
         await session.execute(
             select(ActivityProblem).where(
-                ActivityProblem.tenant_id == tenant_id,
+                ActivityProblem.tenant_id.in_(tenant_ids),
                 ActivityProblem.scope == scope,
                 ActivityProblem.year == year,
                 ActivityProblem.month == month,
             )
+            .order_by(ActivityProblem.updated_at.desc().nulls_last())
+            .limit(1)
         )
     ).scalar_one_or_none()
     return _to_dict(row, scope=scope, year=year, month=month)

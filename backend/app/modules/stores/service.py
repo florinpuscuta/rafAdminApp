@@ -12,8 +12,16 @@ from app.modules.stores.models import Store, StoreAlias
 
 
 async def list_stores(session: AsyncSession, tenant_id: UUID) -> list[Store]:
+    return await list_stores_by_tenants(session, [tenant_id])
+
+
+async def list_stores_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[Store]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
-        select(Store).where(Store.tenant_id == tenant_id).order_by(Store.name)
+        select(Store).where(Store.tenant_id.in_(tenant_ids)).order_by(Store.name)
     )
     return list(result.scalars().all())
 
@@ -33,10 +41,18 @@ async def list_by_chain(
 
 
 async def list_chains(session: AsyncSession, tenant_id: UUID) -> list[str]:
-    """Lanțurile distincte definite de tenant (exclude None)."""
+    return await list_chains_by_tenants(session, [tenant_id])
+
+
+async def list_chains_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[str]:
+    """Lanțurile distincte definite peste tenants (exclude None)."""
+    if not tenant_ids:
+        return []
     result = await session.execute(
         select(Store.chain)
-        .where(Store.tenant_id == tenant_id, Store.chain.is_not(None))
+        .where(Store.tenant_id.in_(tenant_ids), Store.chain.is_not(None))
         .distinct()
         .order_by(Store.chain)
     )
@@ -90,9 +106,17 @@ async def create_store(
 
 
 async def list_aliases(session: AsyncSession, tenant_id: UUID) -> list[StoreAlias]:
+    return await list_aliases_by_tenants(session, [tenant_id])
+
+
+async def list_aliases_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[StoreAlias]:
+    if not tenant_ids:
+        return []
     result = await session.execute(
         select(StoreAlias)
-        .where(StoreAlias.tenant_id == tenant_id)
+        .where(StoreAlias.tenant_id.in_(tenant_ids))
         .order_by(StoreAlias.raw_client)
     )
     return list(result.scalars().all())

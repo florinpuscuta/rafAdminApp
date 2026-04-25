@@ -29,13 +29,33 @@ async def get_activitate(
     date_from: date,
     date_to: date,
 ) -> dict[str, Any]:
+    return await get_activitate_by_tenants(
+        session, [tenant_id],
+        scope=scope, date_from=date_from, date_to=date_to,
+    )
+
+
+async def get_activitate_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    scope: str,
+    date_from: date,
+    date_to: date,
+) -> dict[str, Any]:
+    if not tenant_ids:
+        return {
+            "scope": scope, "date_from": date_from, "date_to": date_to,
+            "agents_count": 0, "total_visits": 0, "total_stores": 0,
+            "total_km": Decimal(0), "agents": [], "todo": None,
+        }
     # 1) vizitele efective din DB pentru intervalul selectat
     visits_rows = (
         await session.execute(
             select(AgentVisit, Store.name)
             .outerjoin(Store, Store.id == AgentVisit.store_id)
             .where(
-                AgentVisit.tenant_id == tenant_id,
+                AgentVisit.tenant_id.in_(tenant_ids),
                 AgentVisit.scope == scope,
                 AgentVisit.visit_date >= date_from,
                 AgentVisit.visit_date <= date_to,
@@ -89,7 +109,7 @@ async def get_activitate(
     agents_canonical = (
         await session.execute(
             select(Agent.id, Agent.full_name)
-            .where(Agent.tenant_id == tenant_id)
+            .where(Agent.tenant_id.in_(tenant_ids))
             .order_by(Agent.full_name)
         )
     ).all()

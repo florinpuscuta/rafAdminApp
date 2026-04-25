@@ -76,11 +76,19 @@ def _check_blocked_tables(sql_lower: str) -> str | None:
     return None
 
 
-def _check_tenant(sql: str, tenant_id: UUID) -> str | None:
-    if str(tenant_id) not in sql:
+def _check_tenant(sql: str, tenant_ids: list[UUID]) -> str | None:
+    """Validăm că SQL-ul referă cel puțin unul din UUID-urile autorizate.
+    Pentru SIKADP user-ul are multiple org_ids și folosește
+    `tenant_id IN ('uuid1','uuid2')` ca să acopere toate; altfel poate
+    folosi `tenant_id = '<unul-dintre-uuid-uri>'`.
+    """
+    if not tenant_ids:
+        return "Niciun tenant autorizat."
+    if not any(str(t) in sql for t in tenant_ids):
+        ids_str = ", ".join(f"'{t}'" for t in tenant_ids)
         return (
-            "Trebuie să incluzi `tenant_id = '<UUID-ul curent>'` în WHERE. "
-            f"UUID-ul tenant-ului tău: {tenant_id}"
+            f"Trebuie să incluzi cel puțin unul dintre UUID-urile autorizate "
+            f"în WHERE (`tenant_id IN ({ids_str})` sau `tenant_id = ...`)."
         )
     return None
 
@@ -91,7 +99,7 @@ def _check_single_statement(sql: str) -> str | None:
     return None
 
 
-def validate_sql(sql: str, tenant_id: UUID) -> str | None:
+def validate_sql(sql: str, tenant_ids: list[UUID]) -> str | None:
     """Validează SQL READ. Întoarce mesaj de eroare dacă e respins; None dacă e OK."""
     if not sql or not sql.strip():
         return "SQL gol."
@@ -103,36 +111,19 @@ def validate_sql(sql: str, tenant_id: UUID) -> str | None:
         return "Cuvinte cheie de modificare detectate (insert/update/delete/...)."
     if (e := _check_blocked_tables(sql.lower())) is not None:
         return e
-    if (e := _check_tenant(sql, tenant_id)) is not None:
-        return e
-    return None
-
-
-def validate_write_sql(sql: str, tenant_id: UUID) -> str | None:
-    """Validează SQL WRITE (INSERT/UPDATE/DELETE). DDL-urile rămân interzise."""
-    if not sql or not sql.strip():
-        return "SQL gol."
-    if (e := _check_single_statement(sql)) is not None:
-        return e
-    if not _WRITE_PREFIX.match(sql):
-        return "Doar INSERT / UPDATE / DELETE sunt permise pentru scriere."
-    if _FORBIDDEN_WRITE_KEYWORDS.search(sql):
-        return "DDL detectat (truncate/drop/alter/create/...) — interzis."
-    if (e := _check_blocked_tables(sql.lower())) is not None:
-        return e
-    if (e := _check_tenant(sql, tenant_id)) is not None:
+    if (e := _check_tenant(sql, tenant_ids)) is not None:
         return e
     return None
 
 
 async def run_sql_readonly(
-    session: AsyncSession, tenant_id: UUID, sql: str
+    session: AsyncSession, tenant_ids: list[UUID], sql: str
 ) -> dict:
     """
     Rulează SQL-ul în tranzacție read-only cu timeout.
     Întoarce dict cu `columns`, `rows`, `row_count`, `truncated`, sau `error`.
     """
-    err = validate_sql(sql, tenant_id)
+    err = validate_sql(sql, tenant_ids)
     if err:
         return {"error": err}
 
@@ -294,6 +285,28 @@ _EXECUTE_WRITE_SCHEMA = {
 }
 
 
+_GET_APP_VIEW_DESC = (
+    "Apelează un VIEW al aplicației și întoarce EXACT ce afișează pagina UI "
+    "corespunzătoare (cu logica de business completă — alocări de discount, "
+    "dedup surse, monthly costs, etc.). Folosește acest tool când user-ul "
+    "întreabă despre un meniu specific (ex. 'marja Aprilie 2026' → marja_lunara)."
+)
+_GET_APP_VIEW_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "view_name": {
+            "type": "string",
+            "description": "Numele view-ului (vezi lista din system prompt).",
+        },
+        "params": {
+            "type": "object",
+            "description": "Parametri specifici view-ului (ex. scope, year, month).",
+        },
+    },
+    "required": ["view_name"],
+}
+
+
 def _anthropic_tool(name: str, desc: str, schema: dict) -> dict:
     return {"name": name, "description": desc, "input_schema": schema}
 
@@ -305,16 +318,40 @@ def _openai_tool(name: str, desc: str, schema: dict) -> dict:
     }
 
 
+_REMEMBER_DESC = (
+    "Salvează o preferință / context persistent (cheie-valoare) la nivel de "
+    "tenant. Se reîncarcă automat în prompt la conversații următoare."
+)
+_REMEMBER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "key": {"type": "string"},
+        "value": {"type": "string"},
+    },
+    "required": ["key", "value"],
+}
+_FORGET_DESC = "Șterge o memorie persistentă după cheie."
+_FORGET_SCHEMA = {
+    "type": "object",
+    "properties": {"key": {"type": "string"}},
+    "required": ["key"],
+}
+
+
+# READ-ONLY: AI-ul are acces la TOATE datele dar nu poate modifica nimic.
+# `propose_write` / `execute_write` au fost scoase intenționat.
 ANTHROPIC_TOOLS: list[dict] = [
+    _anthropic_tool("get_app_view", _GET_APP_VIEW_DESC, _GET_APP_VIEW_SCHEMA),
     _anthropic_tool("query_db", _QUERY_DB_DESC, _QUERY_DB_SCHEMA),
-    _anthropic_tool("propose_write", _PROPOSE_WRITE_DESC, _PROPOSE_WRITE_SCHEMA),
-    _anthropic_tool("execute_write", _EXECUTE_WRITE_DESC, _EXECUTE_WRITE_SCHEMA),
+    _anthropic_tool("remember", _REMEMBER_DESC, _REMEMBER_SCHEMA),
+    _anthropic_tool("forget", _FORGET_DESC, _FORGET_SCHEMA),
 ]
 
 OPENAI_TOOLS: list[dict] = [
+    _openai_tool("get_app_view", _GET_APP_VIEW_DESC, _GET_APP_VIEW_SCHEMA),
     _openai_tool("query_db", _QUERY_DB_DESC, _QUERY_DB_SCHEMA),
-    _openai_tool("propose_write", _PROPOSE_WRITE_DESC, _PROPOSE_WRITE_SCHEMA),
-    _openai_tool("execute_write", _EXECUTE_WRITE_DESC, _EXECUTE_WRITE_SCHEMA),
+    _openai_tool("remember", _REMEMBER_DESC, _REMEMBER_SCHEMA),
+    _openai_tool("forget", _FORGET_DESC, _FORGET_SCHEMA),
 ]
 
 
@@ -413,37 +450,42 @@ _FORGET_SCHEMA = {
 }
 
 
-# Re-construire listă tool-uri cu cele 5 funcții.
-ANTHROPIC_TOOLS = [
-    _anthropic_tool("query_db", _QUERY_DB_DESC, _QUERY_DB_SCHEMA),
-    _anthropic_tool("propose_write", _PROPOSE_WRITE_DESC, _PROPOSE_WRITE_SCHEMA),
-    _anthropic_tool("execute_write", _EXECUTE_WRITE_DESC, _EXECUTE_WRITE_SCHEMA),
-    _anthropic_tool("remember", _REMEMBER_DESC, _REMEMBER_SCHEMA),
-    _anthropic_tool("forget", _FORGET_DESC, _FORGET_SCHEMA),
-]
-OPENAI_TOOLS = [
-    _openai_tool("query_db", _QUERY_DB_DESC, _QUERY_DB_SCHEMA),
-    _openai_tool("propose_write", _PROPOSE_WRITE_DESC, _PROPOSE_WRITE_SCHEMA),
-    _openai_tool("execute_write", _EXECUTE_WRITE_DESC, _EXECUTE_WRITE_SCHEMA),
-    _openai_tool("remember", _REMEMBER_DESC, _REMEMBER_SCHEMA),
-    _openai_tool("forget", _FORGET_DESC, _FORGET_SCHEMA),
-]
+# NOTE: definiția canonică a ANTHROPIC_TOOLS / OPENAI_TOOLS e mai sus (~ linia
+# 343) și include get_app_view + read-only tools. Definiția veche (cu
+# propose_write/execute_write) a fost scoasă intenționat — modul read-only.
 
 
 async def dispatch_tool(
-    session: AsyncSession, tenant_id: UUID, name: str, args: dict
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    name: str,
+    args: dict,
 ) -> dict:
-    """Rutează un tool call către implementarea corectă."""
+    """Rutează un tool call către implementarea corectă (READ-ONLY).
+
+    Memoria persistentă e stocată pe primul tenant (= organizația default a
+    user-ului) — partajată între SIKADP organizations.
+    """
+    primary_tenant = tenant_ids[0] if tenant_ids else None
+    if name == "get_app_view":
+        from app.modules.ai.app_views import get_app_view
+        return await get_app_view(
+            session, tenant_ids,
+            view_name=args.get("view_name", ""),
+            params=args.get("params") or {},
+        )
     if name == "query_db":
-        return await run_sql_readonly(session, tenant_id, args.get("sql", ""))
-    if name == "propose_write":
-        return await propose_write(session, tenant_id, args.get("sql", ""))
-    if name == "execute_write":
-        return await execute_write(session, tenant_id, args.get("token", ""))
+        return await run_sql_readonly(session, tenant_ids, args.get("sql", ""))
     if name == "remember":
+        if primary_tenant is None:
+            return {"error": "Niciun tenant autorizat."}
         return await remember(
-            session, tenant_id, args.get("key", ""), args.get("value", "")
+            session, primary_tenant, args.get("key", ""), args.get("value", "")
         )
     if name == "forget":
-        return await forget(session, tenant_id, args.get("key", ""))
+        if primary_tenant is None:
+            return {"error": "Niciun tenant autorizat."}
+        return await forget(session, primary_tenant, args.get("key", ""))
+    if name in ("propose_write", "execute_write"):
+        return {"error": "Modul read-only — modificările sunt dezactivate."}
     return {"error": f"Tool necunoscut: {name}"}

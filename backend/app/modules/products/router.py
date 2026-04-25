@@ -7,7 +7,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api import APIRouter
 from app.core.db import get_session
 from app.modules.audit import service as audit_service
-from app.modules.auth.deps import get_current_admin, get_current_tenant_id, get_current_user
+from app.modules.auth.deps import (
+    get_current_admin,
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from app.modules.products import service as products_service
 from app.modules.products.schemas import (
     BulkImportResponse,
@@ -30,19 +35,19 @@ router = APIRouter(prefix="/api/products", tags=["products"])
 
 @router.get("", response_model=list[ProductOut])
 async def list_products(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    products = await products_service.list_products(session, tenant_id)
+    products = await products_service.list_products_by_tenants(session, org_ids)
     return [ProductOut.model_validate(p) for p in products]
 
 
 @router.get("/categories", response_model=list[str])
 async def list_categories(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    return await products_service.list_categories(session, tenant_id)
+    return await products_service.list_categories_by_tenants(session, org_ids)
 
 
 @router.post("", response_model=ProductOut, status_code=status.HTTP_201_CREATED)
@@ -72,10 +77,10 @@ async def create_product(
 
 @router.get("/unmapped", response_model=list[UnmappedProductRow])
 async def list_unmapped(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    rows = await sales_service.list_products_without_canonical(session, tenant_id)
+    rows = await sales_service.list_products_without_canonical_by_tenants(session, org_ids)
     return [
         UnmappedProductRow(
             raw_code=code, sample_name=name, row_count=count, total_amount=total
@@ -86,10 +91,10 @@ async def list_unmapped(
 
 @router.get("/aliases", response_model=list[ProductAliasOut])
 async def list_aliases(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    aliases = await products_service.list_aliases(session, tenant_id)
+    aliases = await products_service.list_aliases_by_tenants(session, org_ids)
     return [ProductAliasOut.model_validate(a) for a in aliases]
 
 
@@ -98,10 +103,11 @@ async def create_alias(
     request: Request,
     payload: CreateProductAliasRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     product = await products_service.get_product(
-        session, current_user.tenant_id, payload.product_id
+        session, tenant_id, payload.product_id
     )
     if product is None:
         raise HTTPException(
@@ -110,7 +116,7 @@ async def create_alias(
         )
 
     existing = await products_service.get_alias_by_raw(
-        session, current_user.tenant_id, payload.raw_code
+        session, tenant_id, payload.raw_code
     )
     if existing is not None:
         raise HTTPException(
@@ -123,19 +129,19 @@ async def create_alias(
 
     alias = await products_service.create_alias(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         raw_code=payload.raw_code,
         product_id=payload.product_id,
         resolved_by_user_id=current_user.id,
     )
     await sales_service.backfill_product_for_raw(
-        session, current_user.tenant_id, payload.raw_code, payload.product_id
+        session, tenant_id, payload.raw_code, payload.product_id
     )
     await session.commit()
     await audit_service.log_event(
         session,
         event_type="alias.product.created",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="product_alias",
         target_id=alias.id,
@@ -151,16 +157,17 @@ async def update_alias(
     alias_id: UUID,
     payload: UpdateProductAliasRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    alias = await products_service.get_alias_by_id(session, current_user.tenant_id, alias_id)
+    alias = await products_service.get_alias_by_id(session, tenant_id, alias_id)
     if alias is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "alias_not_found", "message": "Alias inexistent"},
         )
     new_product = await products_service.get_product(
-        session, current_user.tenant_id, payload.product_id
+        session, tenant_id, payload.product_id
     )
     if new_product is None:
         raise HTTPException(
@@ -171,21 +178,21 @@ async def update_alias(
     if old_product_id == payload.product_id:
         return ProductAliasOut.model_validate(alias)
     await sales_service.clear_product_for_raw(
-        session, current_user.tenant_id, alias.raw_code
+        session, tenant_id, alias.raw_code
     )
     alias.product_id = payload.product_id
     alias.resolved_by_user_id = current_user.id
     from datetime import datetime, timezone
     alias.resolved_at = datetime.now(timezone.utc)
     await sales_service.backfill_product_for_raw(
-        session, current_user.tenant_id, alias.raw_code, payload.product_id
+        session, tenant_id, alias.raw_code, payload.product_id
     )
     await session.commit()
     await session.refresh(alias)
     await audit_service.log_event(
         session,
         event_type="alias.product.updated",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="product_alias",
         target_id=alias.id,
@@ -204,10 +211,11 @@ async def delete_alias(
     request: Request,
     alias_id: UUID,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     alias = await products_service.get_alias_by_id(
-        session, current_user.tenant_id, alias_id
+        session, tenant_id, alias_id
     )
     if alias is None:
         raise HTTPException(
@@ -215,12 +223,12 @@ async def delete_alias(
             detail={"code": "alias_not_found", "message": "Alias inexistent"},
         )
     raw_code = alias.raw_code
-    await sales_service.clear_product_for_raw(session, current_user.tenant_id, raw_code)
+    await sales_service.clear_product_for_raw(session, tenant_id, raw_code)
     await products_service.delete_alias(session, alias)
     await audit_service.log_event(
         session,
         event_type="alias.product.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="product_alias",
         target_id=alias_id,
@@ -235,17 +243,18 @@ async def bulk_set_active(
     request: Request,
     payload: BulkSetActiveRequest,
     admin: User = Depends(get_current_admin),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """Activează/dezactivează produse multiple simultan."""
     updated = await products_service.bulk_set_active(
-        session, tenant_id=admin.tenant_id, product_ids=payload.ids, active=payload.active,
+        session, tenant_id=tenant_id, product_ids=payload.ids, active=payload.active,
     )
     await session.commit()
     await audit_service.log_event(
         session,
         event_type="product.bulk_set_active",
-        tenant_id=admin.tenant_id,
+        tenant_id=tenant_id,
         user_id=admin.id,
         metadata={"count": updated, "active": payload.active, "ids": [str(i) for i in payload.ids]},
         request=request,
@@ -258,12 +267,13 @@ async def merge_products(
     request: Request,
     payload: MergeProductsRequest,
     admin: User = Depends(get_current_admin),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     try:
         counts = await products_service.merge_into(
             session,
-            tenant_id=admin.tenant_id,
+            tenant_id=tenant_id,
             primary_id=payload.primary_id,
             duplicate_ids=payload.duplicate_ids,
         )
@@ -278,7 +288,7 @@ async def merge_products(
     await audit_service.log_event(
         session,
         event_type="product.merged",
-        tenant_id=admin.tenant_id,
+        tenant_id=tenant_id,
         user_id=admin.id,
         target_type="product",
         target_id=payload.primary_id,
@@ -293,6 +303,7 @@ async def bulk_import_aliases(
     request: Request,
     file: UploadFile,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -333,8 +344,8 @@ async def bulk_import_aliases(
         )
     idx = {name: i for i, name in enumerate(header)}
 
-    existing_products = {p.code: p for p in await products_service.list_products(session, current_user.tenant_id)}
-    existing_aliases = {a.raw_code for a in await products_service.list_aliases(session, current_user.tenant_id)}
+    existing_products = {p.code: p for p in await products_service.list_products(session, tenant_id)}
+    existing_aliases = {a.raw_code for a in await products_service.list_aliases(session, tenant_id)}
 
     created_products = 0
     created_aliases = 0
@@ -366,7 +377,7 @@ async def bulk_import_aliases(
             try:
                 product = await products_service.create_product(
                     session,
-                    tenant_id=current_user.tenant_id,
+                    tenant_id=tenant_id,
                     code=code,
                     name=name,
                     category=category,
@@ -381,13 +392,13 @@ async def bulk_import_aliases(
         try:
             await products_service.create_alias(
                 session,
-                tenant_id=current_user.tenant_id,
+                tenant_id=tenant_id,
                 raw_code=raw_code,
                 product_id=product.id,
                 resolved_by_user_id=current_user.id,
             )
             await sales_service.backfill_product_for_raw(
-                session, current_user.tenant_id, raw_code, product.id
+                session, tenant_id, raw_code, product.id
             )
             existing_aliases.add(raw_code)
             created_aliases += 1
@@ -398,7 +409,7 @@ async def bulk_import_aliases(
     await audit_service.log_event(
         session,
         event_type="alias.product.bulk_imported",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         metadata={
             "filename": filename,

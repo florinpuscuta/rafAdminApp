@@ -16,6 +16,8 @@ import type {
   ProductSearchItem,
   PromoDiscountType,
   PromoScope,
+  PromoSimMonthlyRow,
+  PromoSimProductRow,
   PromoSimResponse,
   PromoStatus,
   PromoTargetKind,
@@ -222,6 +224,10 @@ export default function PromotionsPage() {
         <SimulationModal
           promo={simulating}
           onClose={() => setSimulating(null)}
+          onPersisted={(updated) => {
+            setSimulating(updated);
+            setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)));
+          }}
         />
       )}
     </div>
@@ -665,47 +671,150 @@ function GroupPicker({
 }
 
 
+function fmtQty(n: number): string {
+  return n.toLocaleString("ro-RO", { maximumFractionDigits: 2 });
+}
+
+
 function SimulationModal({
-  promo, onClose,
-}: { promo: PromotionOut; onClose: () => void }) {
+  promo, onClose, onPersisted,
+}: {
+  promo: PromotionOut;
+  onClose: () => void;
+  onPersisted: (p: PromotionOut) => void;
+}) {
   const [baseline, setBaseline] = useState<BaselineKind>("yoy");
   const [data, setData] = useState<PromoSimResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [recalculating, setRecalculating] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [savedQtyKey, setSavedQtyKey] = useState<string>("");
+  // Inputs controlate (string) — gol = foloseste baseline pentru produsul respectiv.
+  const [qtyOverrides, setQtyOverrides] = useState<Record<string, string>>(() => {
+    const out: Record<string, string> = {};
+    if (promo.manualQuantities) {
+      for (const [pid, q] of Object.entries(promo.manualQuantities)) {
+        out[pid] = q;
+      }
+    }
+    return out;
+  });
 
-  useEffect(() => {
+  function buildOverridesPayload(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [pid, raw] of Object.entries(qtyOverrides)) {
+      const t = (raw ?? "").trim();
+      if (!t) continue;
+      const n = Number(t);
+      if (!Number.isFinite(n) || n < 0) continue;
+      out[pid] = String(n);
+    }
+    return out;
+  }
+
+  function stableKey(obj: Record<string, string>): string {
+    const entries = Object.entries(obj).sort(([a], [b]) => a.localeCompare(b));
+    return JSON.stringify(entries);
+  }
+
+  function loadSimulation(opts: { withOverrides: boolean; markRecalc?: boolean }) {
     let cancelled = false;
-    setLoading(true); setErr(null);
-    simulatePromotion(promo.id, baseline)
+    if (opts.markRecalc) setRecalculating(true);
+    else setLoading(true);
+    setErr(null);
+    const overrides = opts.withOverrides ? buildOverridesPayload() : null;
+    simulatePromotion(promo.id, baseline, overrides)
       .then((r) => { if (!cancelled) setData(r); })
       .catch((e) => { if (!cancelled) setErr(e instanceof Error ? e.message : "Eroare"); })
-      .finally(() => { if (!cancelled) setLoading(false); });
+      .finally(() => {
+        if (!cancelled) {
+          setLoading(false);
+          setRecalculating(false);
+        }
+      });
     return () => { cancelled = true; };
+  }
+
+  // Initial + on baseline change: foloseste manual_quantities salvat pe promo
+  // (din DB); user-ul apasa apoi Recalculează ca sa aplice editari noi.
+  useEffect(() => {
+    return loadSimulation({ withOverrides: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [promo.id, baseline]);
+
+  const currentKey = stableKey(buildOverridesPayload());
+  const persistedKey = stableKey(
+    Object.fromEntries(
+      Object.entries(promo.manualQuantities ?? {}).map(([k, v]) => [k, String(Number(v))]),
+    ),
+  );
+  const isDirty = currentKey !== (savedQtyKey || persistedKey);
+
+  function setQty(pid: string, value: string) {
+    setQtyOverrides((prev) => ({ ...prev, [pid]: value }));
+  }
+
+  function resetQty(pid: string) {
+    setQtyOverrides((prev) => {
+      const next = { ...prev };
+      delete next[pid];
+      return next;
+    });
+  }
+
+  async function persistQty() {
+    setSaving(true); setErr(null);
+    try {
+      const payload: PromotionIn = {
+        scope: promo.scope,
+        name: promo.name,
+        status: promo.status,
+        discountType: promo.discountType,
+        value: promo.value,
+        validFrom: promo.validFrom,
+        validTo: promo.validTo,
+        clientFilter: promo.clientFilter,
+        manualQuantities: buildOverridesPayload(),
+        notes: promo.notes,
+        targets: promo.targets.map((t) => ({ kind: t.kind, key: t.key })),
+      };
+      const updated = await updatePromotion(promo.id, payload);
+      setSavedQtyKey(stableKey(
+        Object.fromEntries(
+          Object.entries(updated.manualQuantities ?? {}).map(([k, v]) => [k, String(Number(v))]),
+        ),
+      ));
+      onPersisted(updated);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Eroare la salvare");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
     <div style={styles.modalOverlay} onClick={onClose}>
-      <div style={{ ...styles.modal, maxWidth: 1100 }} onClick={(e) => e.stopPropagation()}>
+      <div style={styles.modalFull} onClick={(e) => e.stopPropagation()}>
         <div style={styles.modalHeader}>
           <div style={{ fontSize: 16, fontWeight: 700 }}>Simulare: {promo.name}</div>
-          <button type="button" onClick={onClose} style={styles.closeBtn}>×</button>
-        </div>
-
-        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
-          <button
-            type="button"
-            onClick={() => setBaseline("yoy")}
-            style={{ ...styles.tabBtn, ...(baseline === "yoy" ? styles.tabBtnActive : {}) }}
-          >
-            vs Anul Trecut (YoY)
-          </button>
-          <button
-            type="button"
-            onClick={() => setBaseline("mom")}
-            style={{ ...styles.tabBtn, ...(baseline === "mom" ? styles.tabBtnActive : {}) }}
-          >
-            vs Perioada Anterioara (MoM)
-          </button>
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <button
+              type="button"
+              onClick={() => setBaseline("yoy")}
+              style={{ ...styles.tabBtn, ...(baseline === "yoy" ? styles.tabBtnActive : {}) }}
+            >
+              vs Anul Trecut (YoY)
+            </button>
+            <button
+              type="button"
+              onClick={() => setBaseline("mom")}
+              style={{ ...styles.tabBtn, ...(baseline === "mom" ? styles.tabBtnActive : {}) }}
+            >
+              vs Perioada Anterioara (MoM)
+            </button>
+            <button type="button" onClick={onClose} style={styles.closeBtn}>×</button>
+          </div>
         </div>
 
         {loading && <div style={styles.muted}>Se calculeaza...</div>}
@@ -713,11 +822,12 @@ function SimulationModal({
 
         {!loading && data && (
           <>
-            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
               Promotia: <strong>{data.promoLabel}</strong> · Baseline: <strong>{data.baselineLabel}</strong> · {data.productsInScope} produse afectate
             </div>
 
-            <div style={styles.kpiRow}>
+            <div style={styles.sectionLabel}>Impact pe produsele din promoție</div>
+            <div style={styles.kpiRowSingle}>
               <SimKpi label="Revenue baseline" value={fmtRo(toNum(data.baselineRevenue), 0)} unit="RON" />
               <SimKpi label="Revenue scenariu" value={fmtRo(toNum(data.scenarioRevenue), 0)} unit="RON" tone={toNum(data.deltaRevenue) >= 0 ? "good" : "bad"} />
               <SimKpi label="Delta revenue" value={fmtRo(toNum(data.deltaRevenue), 0)} unit="RON" tone={toNum(data.deltaRevenue) >= 0 ? "good" : "bad"} />
@@ -729,48 +839,330 @@ function SimulationModal({
               <SimKpi label="Delta marja (pp)" value={fmtPct(toNum(data.deltaMarginPp), 1)} tone={toNum(data.deltaMarginPp) >= 0 ? "good" : "bad"} />
             </div>
 
-            {data.groups.length > 0 && (
-              <table style={{ ...styles.table, marginTop: 14 }}>
-                <thead>
-                  <tr>
-                    <th style={styles.th}>Grupa</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Rev. baseline</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Rev. scenariu</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Delta rev.</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Profit baseline</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Profit scenariu</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Delta profit</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Marja baseline</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Marja scenariu</th>
-                    <th style={{ ...styles.th, textAlign: "right" }}>Δ pp</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.groups.map((g) => (
-                    <tr key={`${g.kind}::${g.key}`}>
-                      <td style={{ ...styles.td, fontWeight: 600 }}>{g.label}</td>
-                      <td style={styles.tdNum}>{fmtRo(toNum(g.baselineRevenue), 0)}</td>
-                      <td style={styles.tdNum}>{fmtRo(toNum(g.scenarioRevenue), 0)}</td>
-                      <td style={{ ...styles.tdNum, color: toNum(g.deltaRevenue) >= 0 ? "var(--green)" : "var(--red)" }}>
-                        {fmtRo(toNum(g.deltaRevenue), 0)}
-                      </td>
-                      <td style={styles.tdNum}>{fmtRo(toNum(g.baselineProfit), 0)}</td>
-                      <td style={styles.tdNum}>{fmtRo(toNum(g.scenarioProfit), 0)}</td>
-                      <td style={{ ...styles.tdNum, color: toNum(g.deltaProfit) >= 0 ? "var(--green)" : "var(--red)" }}>
-                        {fmtRo(toNum(g.deltaProfit), 0)}
-                      </td>
-                      <td style={styles.tdNum}>{fmtPct(toNum(g.baselineMarginPct), 1)}</td>
-                      <td style={styles.tdNum}>{fmtPct(toNum(g.scenarioMarginPct), 1)}</td>
-                      <td style={{ ...styles.tdNum, color: toNum(g.deltaMarginPp) >= 0 ? "var(--green)" : "var(--red)" }}>
-                        {fmtPct(toNum(g.deltaMarginPp), 1)}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div style={{ ...styles.sectionLabel, marginTop: 10 }}>
+              Impact pe marja generală scope ({promo.scope === "adp" ? "Adeplast" : "Sika"} KA)
+            </div>
+            <div style={styles.kpiRowSingle}>
+              <SimKpi label="Revenue scope baseline" value={fmtRo(toNum(data.scopeBaselineRevenue), 0)} unit="RON" />
+              <SimKpi label="Revenue scope scenariu" value={fmtRo(toNum(data.scopeScenarioRevenue), 0)} unit="RON" tone={toNum(data.scopeDeltaRevenue) >= 0 ? "good" : "bad"} />
+              <SimKpi label="Delta revenue scope" value={fmtRo(toNum(data.scopeDeltaRevenue), 0)} unit="RON" tone={toNum(data.scopeDeltaRevenue) >= 0 ? "good" : "bad"} />
+              <SimKpi label="Profit scope baseline" value={fmtRo(toNum(data.scopeBaselineProfit), 0)} unit="RON" />
+              <SimKpi label="Profit scope scenariu" value={fmtRo(toNum(data.scopeScenarioProfit), 0)} unit="RON" tone={toNum(data.scopeScenarioProfit) >= 0 ? "good" : "bad"} />
+              <SimKpi label="Delta profit scope" value={fmtRo(toNum(data.scopeDeltaProfit), 0)} unit="RON" tone={toNum(data.scopeDeltaProfit) >= 0 ? "good" : "bad"} />
+              <SimKpi label="Marja scope baseline" value={fmtPct(toNum(data.scopeBaselineMarginPct), 1)} />
+              <SimKpi label="Marja scope scenariu" value={fmtPct(toNum(data.scopeScenarioMarginPct), 1)} tone={toNum(data.scopeScenarioMarginPct) >= 25 ? "good" : "bad"} />
+              <SimKpi label="Delta marja scope (pp)" value={fmtPct(toNum(data.scopeDeltaMarginPp), 2)} tone={toNum(data.scopeDeltaMarginPp) >= 0 ? "good" : "bad"} />
+            </div>
+
+            <div style={styles.chartsRow}>
+              <MonthlyMarginChart
+                rows={data.monthly}
+                scopeLabel={promo.scope === "adp" ? "Adeplast" : "Sika"}
+              />
+              <PerProductMarginChart rows={data.products} />
+            </div>
+
+            {data.products.length > 0 && (
+              <ProductSimulationTable
+                rows={data.products}
+                qtyOverrides={qtyOverrides}
+                setQty={setQty}
+                resetQty={resetQty}
+              />
             )}
+
+            <div style={styles.modalFooter}>
+              <div style={{ flex: 1, fontSize: 11, color: "var(--muted)" }}>
+                {isDirty
+                  ? "Ai modificări nesalvate la cantități. Apasă Recalculează ca să vezi efectul, apoi Salvează."
+                  : "Cantitățile estimate sunt salvate pe promoție și vor fi folosite pentru calibrare la finalul perioadei."}
+              </div>
+              <button
+                type="button"
+                onClick={() => loadSimulation({ withOverrides: true, markRecalc: true })}
+                disabled={loading || recalculating || saving}
+                style={styles.secondaryBtn}
+                title="Reaplica simularea cu cantitatile editate"
+              >
+                {recalculating ? "Recalculează..." : "↻ Recalculează"}
+              </button>
+              <button
+                type="button"
+                onClick={persistQty}
+                disabled={saving || loading || recalculating || !isDirty}
+                style={{ ...styles.primaryBtn, opacity: isDirty ? 1 : 0.5 }}
+                title={isDirty
+                  ? "Salveaza cantitatile estimate pe promotie"
+                  : "Niciun edit nesalvat"}
+              >
+                {saving ? "Salveaza..." : isDirty ? "Salvează cantități*" : "Cantități salvate"}
+              </button>
+            </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+
+function MonthlyMarginChart({
+  rows, scopeLabel,
+}: { rows: PromoSimMonthlyRow[]; scopeLabel: string }) {
+  const W = 780;
+  const H = 240;
+  const PAD_L = 38;
+  const PAD_R = 16;
+  const PAD_T = 22;
+  const PAD_B = 28;
+
+  if (rows.length === 0) {
+    return (
+      <div style={styles.chartCard}>
+        <div style={styles.chartTitle}>Marja KA {scopeLabel} — YTD</div>
+        <div style={styles.muted}>Nu există date pentru anul curent.</div>
+      </div>
+    );
+  }
+
+  const baseValues = rows.map((m) => toNum(m.scopeBaselineMarginPct));
+  const simValues = rows.map((m) => toNum(m.scopeScenarioMarginPct));
+  const allValues = [...baseValues, ...simValues];
+  const rawMin = Math.min(...allValues);
+  const rawMax = Math.max(...allValues);
+  const span = Math.max(2, rawMax - rawMin);
+  const minV = rawMin - span * 0.15;
+  const maxV = rawMax + span * 0.15;
+  const x = (i: number) => PAD_L + (i / Math.max(1, rows.length - 1)) * (W - PAD_L - PAD_R);
+  const y = (v: number) => PAD_T + (1 - (v - minV) / (maxV - minV)) * (H - PAD_T - PAD_B);
+
+  const pathFor = (vals: number[]) =>
+    vals.map((v, i) => `${i === 0 ? "M" : "L"} ${x(i).toFixed(1)} ${y(v).toFixed(1)}`).join(" ");
+
+  return (
+    <div style={styles.chartCard}>
+      <div style={styles.chartTitle}>
+        Marja KA {scopeLabel} — YTD ({rows[0]?.monthLabel} → {rows[rows.length - 1]?.monthLabel})
+      </div>
+      <div style={{ display: "flex", gap: 14, fontSize: 11, color: "var(--muted)", marginBottom: 4, flexWrap: "wrap" }}>
+        <span><span style={{ display: "inline-block", width: 22, height: 0, borderTop: "2px dashed var(--muted)", verticalAlign: "middle", marginRight: 4 }}/> Baseline (fără promoție)</span>
+        <span><span style={{ display: "inline-block", width: 22, height: 0, borderTop: "2px solid var(--cyan)", verticalAlign: "middle", marginRight: 4 }}/> Scenariu (cu promoție)</span>
+        <span><span style={{ display: "inline-block", width: 10, height: 10, background: "var(--orange)", borderRadius: "50%", verticalAlign: "middle", marginRight: 4, opacity: 0.7 }}/> Lună proiectată (proxy YoY)</span>
+      </div>
+      <svg width={W} height={H} style={{ maxWidth: "100%", height: "auto", display: "block" }}>
+        <line x1={PAD_L} y1={H - PAD_B} x2={W - PAD_R} y2={H - PAD_B} stroke="rgba(255,255,255,0.15)" />
+        <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={H - PAD_B} stroke="rgba(255,255,255,0.15)" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const v = minV + (maxV - minV) * (1 - t);
+          return (
+            <g key={t}>
+              <line x1={PAD_L} y1={PAD_T + t * (H - PAD_T - PAD_B)} x2={W - PAD_R} y2={PAD_T + t * (H - PAD_T - PAD_B)} stroke="rgba(255,255,255,0.05)" />
+              <text x={PAD_L - 4} y={PAD_T + t * (H - PAD_T - PAD_B) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v.toFixed(1)}%</text>
+            </g>
+          );
+        })}
+        <path d={pathFor(baseValues)} fill="none" stroke="var(--muted)" strokeWidth={2} strokeDasharray="4 4" />
+        <path d={pathFor(simValues)} fill="none" stroke="var(--cyan)" strokeWidth={2.5} />
+        {rows.map((m, i) => {
+          const inPromo = m.inPromoPeriod;
+          const projected = m.isProjected;
+          const dotColor = projected ? "var(--orange)" : "var(--cyan)";
+          return (
+            <g key={`${m.year}-${m.month}`}>
+              {inPromo && (
+                <rect x={x(i) - 16} y={PAD_T} width={32} height={H - PAD_T - PAD_B} fill="rgba(34,211,238,0.06)" />
+              )}
+              <circle cx={x(i)} cy={y(baseValues[i])} r={3} fill="var(--muted)" />
+              <circle cx={x(i)} cy={y(simValues[i])} r={4} fill={dotColor} opacity={projected ? 0.85 : 1} />
+              <text x={x(i)} y={y(simValues[i]) - 8} fill="var(--text)" fontSize={10} textAnchor="middle">
+                {simValues[i].toFixed(1)}%
+              </text>
+              <text x={x(i)} y={H - 10} fill={projected ? "var(--orange)" : "var(--muted)"} fontSize={10} textAnchor="middle" fontStyle={projected ? "italic" : "normal"}>
+                {m.monthLabel}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+
+function PerProductMarginChart({ rows }: { rows: PromoSimProductRow[] }) {
+  const W = 780;
+  const H = 240;
+  const PAD_L = 38;
+  const PAD_R = 16;
+  const PAD_T = 22;
+  const PAD_B = 64;
+
+  if (rows.length === 0) {
+    return (
+      <div style={styles.chartCard}>
+        <div style={styles.chartTitle}>Impact pe marja per produs</div>
+        <div style={styles.muted}>Nu sunt produse afectate.</div>
+      </div>
+    );
+  }
+
+  const top = rows.slice(0, 12);
+  const baseVals = top.map((p) => toNum(p.baselineMarginPct));
+  const simVals = top.map((p) => toNum(p.scenarioMarginPct));
+  const allVals = [...baseVals, ...simVals, 0];
+  const rawMin = Math.min(...allVals);
+  const rawMax = Math.max(...allVals);
+  const minV = Math.min(0, rawMin - 5);
+  const maxV = Math.max(50, rawMax + 5);
+  const slot = (W - PAD_L - PAD_R) / top.length;
+  const barW = Math.max(8, Math.min(28, slot * 0.35));
+  const y = (v: number) => PAD_T + (1 - (v - minV) / (maxV - minV)) * (H - PAD_T - PAD_B);
+  const zero = y(0);
+
+  return (
+    <div style={styles.chartCard}>
+      <div style={styles.chartTitle}>
+        Impact marja per produs ({rows.length}{rows.length > 12 ? ` · top 12` : ""})
+      </div>
+      <div style={{ display: "flex", gap: 14, fontSize: 11, color: "var(--muted)", marginBottom: 4 }}>
+        <span><span style={{ display: "inline-block", width: 12, height: 12, background: "var(--muted)", verticalAlign: "middle", marginRight: 4, opacity: 0.6 }}/> Baseline</span>
+        <span><span style={{ display: "inline-block", width: 12, height: 12, background: "var(--cyan)", verticalAlign: "middle", marginRight: 4 }}/> Scenariu (cu promoție)</span>
+      </div>
+      <svg width={W} height={H} style={{ maxWidth: "100%", height: "auto", display: "block" }}>
+        <line x1={PAD_L} y1={zero} x2={W - PAD_R} y2={zero} stroke="rgba(255,255,255,0.2)" />
+        {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+          const v = minV + (maxV - minV) * (1 - t);
+          return (
+            <g key={t}>
+              <line x1={PAD_L} y1={PAD_T + t * (H - PAD_T - PAD_B)} x2={W - PAD_R} y2={PAD_T + t * (H - PAD_T - PAD_B)} stroke="rgba(255,255,255,0.05)" />
+              <text x={PAD_L - 4} y={PAD_T + t * (H - PAD_T - PAD_B) + 3} fill="var(--muted)" fontSize={9} textAnchor="end">{v.toFixed(0)}%</text>
+            </g>
+          );
+        })}
+        {top.map((p, i) => {
+          const cx = PAD_L + slot * (i + 0.5);
+          const baseV = baseVals[i];
+          const simV = simVals[i];
+          const baseY = y(baseV);
+          const simY = y(simV);
+          const baseTop = Math.min(baseY, zero);
+          const baseH = Math.abs(baseY - zero);
+          const simTop = Math.min(simY, zero);
+          const simH = Math.abs(simY - zero);
+          const label = p.code.length > 12 ? p.code.slice(0, 12) + "…" : p.code;
+          return (
+            <g key={p.productId}>
+              <rect x={cx - barW - 2} y={baseTop} width={barW} height={baseH} fill="var(--muted)" opacity={0.6} />
+              <rect x={cx + 2} y={simTop} width={barW} height={simH} fill="var(--cyan)" />
+              <text x={cx - barW / 2 - 2} y={baseTop - 4} fill="var(--muted)" fontSize={9} textAnchor="middle">{baseV.toFixed(1)}</text>
+              <text x={cx + barW / 2 + 2} y={simTop - 4} fill="var(--cyan)" fontSize={9} textAnchor="middle">{simV.toFixed(1)}</text>
+              <g transform={`translate(${cx},${H - PAD_B + 12}) rotate(-30)`}>
+                <text fill="var(--muted)" fontSize={9} textAnchor="end">{label}</text>
+              </g>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+
+function ProductSimulationTable({
+  rows, qtyOverrides, setQty, resetQty,
+}: {
+  rows: PromoSimProductRow[];
+  qtyOverrides: Record<string, string>;
+  setQty: (pid: string, v: string) => void;
+  resetQty: (pid: string) => void;
+}) {
+  return (
+    <div style={{ flexShrink: 0, marginTop: 14 }}>
+      <div style={{ ...styles.sectionLabel, display: "flex", alignItems: "center", gap: 10, marginTop: 0 }}>
+        Estimare per produs ({rows.length})
+        <span style={{ fontSize: 10, color: "var(--muted)", fontWeight: 500, textTransform: "none", letterSpacing: 0 }}>
+          (gol = foloseste sugestia YoY · apasa Recalculează după edit)
+        </span>
+      </div>
+      <div style={{ border: "1px solid var(--border)", borderRadius: 6, overflowX: "auto" }}>
+        <table style={{ ...styles.table, minWidth: 900 }}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Produs</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Qty YoY</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Qty estimat</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Pret unitar</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Rev. baseline</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Rev. scenariu</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Δ rev.</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Marja baseline</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Marja scenariu</th>
+              <th style={{ ...styles.th, textAlign: "right" }}>Δ pp</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p) => {
+              const baselineQty = toNum(p.baselineQuantity);
+              const overrideRaw = qtyOverrides[p.productId];
+              const isEdited = overrideRaw !== undefined && overrideRaw !== "";
+              return (
+                <tr key={p.productId}>
+                  <td style={{ ...styles.td }}>
+                    <div style={{ fontWeight: 600 }}>{p.name}</div>
+                    <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                      {p.code} · {p.groupLabel}
+                    </div>
+                  </td>
+                  <td style={styles.tdNum}>{fmtQty(baselineQty)}</td>
+                  <td style={{ ...styles.tdNum, padding: "4px 6px" }}>
+                    <div style={{ display: "flex", gap: 4, justifyContent: "flex-end", alignItems: "center" }}>
+                      <input
+                        type="number"
+                        step="any"
+                        min="0"
+                        value={overrideRaw ?? ""}
+                        placeholder={fmtQty(baselineQty)}
+                        onChange={(e) => setQty(p.productId, e.target.value)}
+                        style={{
+                          background: "var(--bg)",
+                          color: "var(--text)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 4,
+                          padding: "3px 6px",
+                          fontSize: 12,
+                          textAlign: "right",
+                          width: 90,
+                          ...(isEdited ? { borderColor: "var(--cyan)" } : {}),
+                        }}
+                      />
+                      {isEdited && (
+                        <button
+                          type="button"
+                          onClick={() => resetQty(p.productId)}
+                          style={{ ...styles.smallBtn, padding: "2px 5px", fontSize: 10 }}
+                          title="Reset la qty YoY"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td style={styles.tdNum}>{fmtRo(toNum(p.baselineUnitPrice), 2)}</td>
+                  <td style={styles.tdNum}>{fmtRo(toNum(p.baselineRevenue), 0)}</td>
+                  <td style={styles.tdNum}>{fmtRo(toNum(p.scenarioRevenue), 0)}</td>
+                  <td style={{ ...styles.tdNum, color: toNum(p.deltaRevenue) >= 0 ? "var(--green)" : "var(--red)" }}>
+                    {fmtRo(toNum(p.deltaRevenue), 0)}
+                  </td>
+                  <td style={styles.tdNum}>{fmtPct(toNum(p.baselineMarginPct), 1)}</td>
+                  <td style={styles.tdNum}>{fmtPct(toNum(p.scenarioMarginPct), 1)}</td>
+                  <td style={{ ...styles.tdNum, color: toNum(p.deltaMarginPp) >= 0 ? "var(--green)" : "var(--red)" }}>
+                    {fmtPct(toNum(p.deltaMarginPp), 1)}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
       </div>
     </div>
   );
@@ -884,6 +1276,18 @@ const styles: Record<string, CSSProperties> = {
     maxHeight: "90vh", overflowY: "auto",
     display: "flex", flexDirection: "column", gap: 12,
   },
+  modalFull: {
+    background: "var(--card)",
+    border: "1px solid var(--border)",
+    borderRadius: 10,
+    padding: 20,
+    width: "calc(100vw - 40px)",
+    height: "calc(100vh - 40px)",
+    overflowY: "auto",
+    display: "flex",
+    flexDirection: "column",
+    gap: 10,
+  },
   modalHeader: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     paddingBottom: 8, borderBottom: "1px solid var(--border)",
@@ -911,6 +1315,36 @@ const styles: Record<string, CSSProperties> = {
     display: "grid",
     gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
     gap: 8,
+  },
+  kpiRowSingle: {
+    display: "grid",
+    gridTemplateColumns: "repeat(9, minmax(0, 1fr))",
+    gap: 8,
+  },
+  chartsRow: {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 12,
+    marginTop: 8,
+  },
+  chartCard: {
+    background: "rgba(0,0,0,0.18)",
+    border: "1px solid var(--border)",
+    borderRadius: 8,
+    padding: "10px 12px",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  },
+  chartTitle: {
+    fontSize: 12,
+    fontWeight: 700,
+    color: "var(--text)",
+  },
+  sectionLabel: {
+    fontSize: 11, color: "var(--muted)",
+    textTransform: "uppercase", letterSpacing: "0.06em",
+    fontWeight: 700, marginBottom: 6,
   },
   kpiCard: {
     background: "rgba(0,0,0,0.15)", border: "1px solid var(--border)",

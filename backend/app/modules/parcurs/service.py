@@ -37,9 +37,17 @@ _DAY_NAMES = ["Luni", "Marți", "Miercuri", "Joi", "Vineri", "Sâmbătă", "Dumi
 async def list_agents(
     session: AsyncSession, tenant_id: UUID, *, scope: str,
 ) -> list[dict[str, Any]]:
+    return await list_agents_by_tenants(session, [tenant_id], scope=scope)
+
+
+async def list_agents_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], *, scope: str,
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     subq = (
         select(Store.agent_id, func.count(Store.id).label("cnt"))
-        .where(Store.tenant_id == tenant_id, Store.agent_id.isnot(None))
+        .where(Store.tenant_id.in_(tenant_ids), Store.agent_id.isnot(None))
         .group_by(Store.agent_id)
         .subquery()
     )
@@ -47,7 +55,7 @@ async def list_agents(
         await session.execute(
             select(Agent.id, Agent.full_name, subq.c.cnt)
             .outerjoin(subq, subq.c.agent_id == Agent.id)
-            .where(Agent.tenant_id == tenant_id)
+            .where(Agent.tenant_id.in_(tenant_ids))
             .order_by(Agent.full_name)
         )
     ).all()
@@ -60,13 +68,23 @@ async def list_agents(
 async def list_stores_for_agent(
     session: AsyncSession, tenant_id: UUID, *, scope: str, agent_name: str,
 ) -> list[dict[str, Any]]:
+    return await list_stores_for_agent_by_tenants(
+        session, [tenant_id], scope=scope, agent_name=agent_name,
+    )
+
+
+async def list_stores_for_agent_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], *, scope: str, agent_name: str,
+) -> list[dict[str, Any]]:
+    if not tenant_ids:
+        return []
     rows = (
         await session.execute(
             select(Store.id, Store.name)
             .join(Agent, Agent.id == Store.agent_id)
             .where(
-                Agent.tenant_id == tenant_id,
-                Store.tenant_id == tenant_id,
+                Agent.tenant_id.in_(tenant_ids),
+                Store.tenant_id.in_(tenant_ids),
                 Agent.full_name == agent_name,
             )
             .order_by(Store.name)
@@ -296,11 +314,19 @@ async def generate(
 async def list_sheets(
     session: AsyncSession, tenant_id: UUID, *, scope: str,
 ) -> list[dict[str, Any]]:
-    """Listă foi existente per (tenant, scope), cele mai recente primele."""
+    return await list_sheets_by_tenants(session, [tenant_id], scope=scope)
+
+
+async def list_sheets_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID], *, scope: str,
+) -> list[dict[str, Any]]:
+    """Listă foi existente per (tenants, scope), cele mai recente primele."""
+    if not tenant_ids:
+        return []
     rows = (
         await session.execute(
             select(TravelSheet)
-            .where(TravelSheet.tenant_id == tenant_id, TravelSheet.scope == scope)
+            .where(TravelSheet.tenant_id.in_(tenant_ids), TravelSheet.scope == scope)
             .order_by(TravelSheet.year.desc(), TravelSheet.month.desc(), TravelSheet.agent_name)
         )
     ).scalars().all()

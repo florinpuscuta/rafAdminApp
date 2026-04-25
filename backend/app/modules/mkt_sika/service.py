@@ -267,16 +267,30 @@ async def rotate_photo(
 # ── Placeholder legacy pentru compatibilitate (endpoint `GET /api/marketing/sika`). ──
 
 async def list_items(session: AsyncSession, tenant_id: UUID) -> dict[str, Any]:
-    folders = await gallery_svc.list_folders(session, tenant_id, type_=GALLERY_TYPE)
+    return await list_items_by_tenants(session, [tenant_id])
+
+
+async def list_items_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> dict[str, Any]:
+    """Listă foldere SIKA agregate cross-tenant."""
+    if not tenant_ids:
+        return {"items": [], "notice": "Nu există încă acțiuni SIKA."}
     items = []
-    for folder, photo_count in folders:
-        luna = folder.name if _FOLDER_NAME_RE.match(folder.name) else None
-        items.append({
-            "id": str(folder.id),
-            "title": folder.name,
-            "luna": luna,
-            "notes": f"{photo_count} poze",
-        })
+    seen: set[str] = set()
+    for tid in tenant_ids:
+        folders = await gallery_svc.list_folders(session, tid, type_=GALLERY_TYPE)
+        for folder, photo_count in folders:
+            if folder.name in seen:
+                continue
+            seen.add(folder.name)
+            luna = folder.name if _FOLDER_NAME_RE.match(folder.name) else None
+            items.append({
+                "id": str(folder.id),
+                "title": folder.name,
+                "luna": luna,
+                "notes": f"{photo_count} poze",
+            })
     notice = None
     if not items:
         notice = "Nu există încă acțiuni SIKA."

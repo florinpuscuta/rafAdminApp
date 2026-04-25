@@ -17,7 +17,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_user
+from app.modules.auth.deps import (
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from app.modules.mkt_panouri import service as svc
 from app.modules.mkt_panouri.schemas import (
     AddPanelBody,
@@ -34,20 +38,20 @@ router = APIRouter(prefix="/api/marketing/panouri", tags=["marketing-panouri"])
 
 @router.get("/stores", response_model=StoresResponse)
 async def api_stores(
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    stores = await svc.list_stores(session, current_user.tenant_id)
+    stores = await svc.list_stores_by_tenants(session, org_ids)
     return StoresResponse(stores=stores)
 
 
 @router.get("/store/{store_name:path}", response_model=StoreDetailResponse)
 async def api_store_detail(
     store_name: str,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    data = await svc.get_store_detail(session, current_user.tenant_id, store_name)
+    data = await svc.get_store_detail_by_tenants(session, org_ids, store_name)
     return StoreDetailResponse.model_validate(data)
 
 
@@ -56,10 +60,11 @@ async def api_add_panel(
     store_name: str,
     body: AddPanelBody,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     await svc.add_panel(
-        session, current_user.tenant_id, store_name,
+        session, tenant_id, store_name,
         panel_type=body.panel_type,
         title=body.title,
         width_cm=body.width_cm,
@@ -75,7 +80,7 @@ async def api_add_panel(
 async def api_update_panel(
     panel_id: UUID,
     body: UpdatePanelBody,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     data = body.model_dump(exclude_unset=True)
@@ -84,8 +89,21 @@ async def api_update_panel(
             status.HTTP_400_BAD_REQUEST,
             detail={"ok": False, "error": "Nimic de actualizat"},
         )
-    await svc.update_panel(session, current_user.tenant_id, panel_id, data)
-    return OkResponse()
+    from sqlalchemy import select as _sel
+    from app.modules.mkt_panouri.models import PanouStand
+    for tid in org_ids:
+        existing = (await session.execute(
+            _sel(PanouStand).where(
+                PanouStand.tenant_id == tid, PanouStand.id == panel_id,
+            )
+        )).scalar_one_or_none()
+        if existing is not None:
+            await svc.update_panel(session, tid, panel_id, data)
+            return OkResponse()
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail={"ok": False, "error": "Panou inexistent"},
+    )
 
 
 @router.post("/store/{store_name:path}/photos")
@@ -93,6 +111,7 @@ async def api_upload_panouri_photos(
     store_name: str,
     images: list[UploadFile] = File(...),
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """Upload multiple photos pentru store. Multipart form-data `images[]`.
@@ -105,14 +124,14 @@ async def api_upload_panouri_photos(
     # Upsert folder
     folder = (await session.execute(
         _sel(GalleryFolder).where(
-            GalleryFolder.tenant_id == current_user.tenant_id,
+            GalleryFolder.tenant_id == tenant_id,
             GalleryFolder.type == "panouri",
             GalleryFolder.name == store_name,
         )
     )).scalar_one_or_none()
     if folder is None:
         folder = GalleryFolder(
-            tenant_id=current_user.tenant_id, type="panouri", name=store_name,
+            tenant_id=tenant_id, type="panouri", name=store_name,
         )
         session.add(folder)
         await session.flush()
@@ -124,7 +143,7 @@ async def api_upload_panouri_photos(
             continue
         await gallery_service.upload_photo(
             session,
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             folder=folder,
             filename=f.filename or "photo.jpg",
             content=content,
@@ -138,8 +157,21 @@ async def api_upload_panouri_photos(
 @router.delete("/panel/{panel_id}", response_model=OkResponse)
 async def api_delete_panel(
     panel_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    await svc.delete_panel(session, current_user.tenant_id, panel_id)
-    return OkResponse()
+    from sqlalchemy import select as _sel
+    from app.modules.mkt_panouri.models import PanouStand
+    for tid in org_ids:
+        existing = (await session.execute(
+            _sel(PanouStand).where(
+                PanouStand.tenant_id == tid, PanouStand.id == panel_id,
+            )
+        )).scalar_one_or_none()
+        if existing is not None:
+            await svc.delete_panel(session, tid, panel_id)
+            return OkResponse()
+    raise HTTPException(
+        status.HTTP_404_NOT_FOUND,
+        detail={"ok": False, "error": "Panou inexistent"},
+    )

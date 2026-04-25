@@ -23,7 +23,12 @@ from app.modules.agents.schemas import (
     UnmappedAgentRow,
     UpdateAgentAliasRequest,
 )
-from app.modules.auth.deps import get_current_admin, get_current_tenant_id, get_current_user
+from app.modules.auth.deps import (
+    get_current_admin,
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from app.modules.sales import service as sales_service
 from app.modules.users.models import User
 
@@ -32,10 +37,10 @@ router = APIRouter(prefix="/api/agents", tags=["agents"])
 
 @router.get("", response_model=list[AgentOut])
 async def list_agents(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    agents = await agents_service.list_agents(session, tenant_id)
+    agents = await agents_service.list_agents_by_tenants(session, org_ids)
     return [AgentOut.model_validate(a) for a in agents]
 
 
@@ -65,10 +70,10 @@ async def create_agent(
 
 @router.get("/unmapped", response_model=list[UnmappedAgentRow])
 async def list_unmapped(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    rows = await sales_service.list_agents_without_canonical(session, tenant_id)
+    rows = await sales_service.list_agents_without_canonical_by_tenants(session, org_ids)
     return [
         UnmappedAgentRow(raw_agent=raw, row_count=count, total_amount=total)
         for raw, count, total in rows
@@ -77,10 +82,10 @@ async def list_unmapped(
 
 @router.get("/aliases", response_model=list[AgentAliasOut])
 async def list_aliases(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    aliases = await agents_service.list_aliases(session, tenant_id)
+    aliases = await agents_service.list_aliases_by_tenants(session, org_ids)
     return [AgentAliasOut.model_validate(a) for a in aliases]
 
 
@@ -89,9 +94,10 @@ async def create_alias(
     request: Request,
     payload: CreateAgentAliasRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    agent = await agents_service.get_agent(session, current_user.tenant_id, payload.agent_id)
+    agent = await agents_service.get_agent(session, tenant_id, payload.agent_id)
     if agent is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -99,7 +105,7 @@ async def create_alias(
         )
 
     existing = await agents_service.get_alias_by_raw(
-        session, current_user.tenant_id, payload.raw_agent
+        session, tenant_id, payload.raw_agent
     )
     if existing is not None:
         raise HTTPException(
@@ -112,19 +118,19 @@ async def create_alias(
 
     alias = await agents_service.create_alias(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         raw_agent=payload.raw_agent,
         agent_id=payload.agent_id,
         resolved_by_user_id=current_user.id,
     )
     await sales_service.backfill_agent_for_raw(
-        session, current_user.tenant_id, payload.raw_agent, payload.agent_id
+        session, tenant_id, payload.raw_agent, payload.agent_id
     )
     await session.commit()
     await audit_service.log_event(
         session,
         event_type="alias.agent.created",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="agent_alias",
         target_id=alias.id,
@@ -140,15 +146,16 @@ async def update_alias(
     alias_id: UUID,
     payload: UpdateAgentAliasRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
-    alias = await agents_service.get_alias_by_id(session, current_user.tenant_id, alias_id)
+    alias = await agents_service.get_alias_by_id(session, tenant_id, alias_id)
     if alias is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "alias_not_found", "message": "Alias inexistent"},
         )
-    new_agent = await agents_service.get_agent(session, current_user.tenant_id, payload.agent_id)
+    new_agent = await agents_service.get_agent(session, tenant_id, payload.agent_id)
     if new_agent is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -157,20 +164,20 @@ async def update_alias(
     old_agent_id = alias.agent_id
     if old_agent_id == payload.agent_id:
         return AgentAliasOut.model_validate(alias)
-    await sales_service.clear_agent_for_raw(session, current_user.tenant_id, alias.raw_agent)
+    await sales_service.clear_agent_for_raw(session, tenant_id, alias.raw_agent)
     alias.agent_id = payload.agent_id
     alias.resolved_by_user_id = current_user.id
     from datetime import datetime, timezone
     alias.resolved_at = datetime.now(timezone.utc)
     await sales_service.backfill_agent_for_raw(
-        session, current_user.tenant_id, alias.raw_agent, payload.agent_id
+        session, tenant_id, alias.raw_agent, payload.agent_id
     )
     await session.commit()
     await session.refresh(alias)
     await audit_service.log_event(
         session,
         event_type="alias.agent.updated",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="agent_alias",
         target_id=alias.id,
@@ -189,10 +196,11 @@ async def delete_alias(
     request: Request,
     alias_id: UUID,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     alias = await agents_service.get_alias_by_id(
-        session, current_user.tenant_id, alias_id
+        session, tenant_id, alias_id
     )
     if alias is None:
         raise HTTPException(
@@ -200,12 +208,12 @@ async def delete_alias(
             detail={"code": "alias_not_found", "message": "Alias inexistent"},
         )
     raw_agent = alias.raw_agent
-    await sales_service.clear_agent_for_raw(session, current_user.tenant_id, raw_agent)
+    await sales_service.clear_agent_for_raw(session, tenant_id, raw_agent)
     await agents_service.delete_alias(session, alias)
     await audit_service.log_event(
         session,
         event_type="alias.agent.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="agent_alias",
         target_id=alias_id,
@@ -220,10 +228,10 @@ async def delete_alias(
 
 @router.get("/assignments", response_model=list[AssignmentOut])
 async def list_assignments(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    items = await agents_service.list_assignments(session, tenant_id)
+    items = await agents_service.list_assignments_by_tenants(session, org_ids)
     return [AssignmentOut.model_validate(a) for a in items]
 
 
@@ -232,18 +240,19 @@ async def create_assignment(
     request: Request,
     payload: AssignRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     a = await agents_service.assign_store_to_agent(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         agent_id=payload.agent_id,
         store_id=payload.store_id,
     )
     await audit_service.log_event(
         session,
         event_type="agent_assignment.created",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="agent_assignment",
         target_id=a.id,
@@ -258,11 +267,12 @@ async def delete_assignment(
     request: Request,
     payload: AssignRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     ok = await agents_service.unassign_store_from_agent(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         agent_id=payload.agent_id,
         store_id=payload.store_id,
     )
@@ -274,7 +284,7 @@ async def delete_assignment(
     await audit_service.log_event(
         session,
         event_type="agent_assignment.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="agent_assignment",
         metadata={"agent_id": str(payload.agent_id), "store_id": str(payload.store_id)},
@@ -288,17 +298,18 @@ async def bulk_set_active(
     request: Request,
     payload: BulkSetActiveRequest,
     admin: User = Depends(get_current_admin),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """Activează/dezactivează agenți multipli simultan."""
     updated = await agents_service.bulk_set_active(
-        session, tenant_id=admin.tenant_id, agent_ids=payload.ids, active=payload.active,
+        session, tenant_id=tenant_id, agent_ids=payload.ids, active=payload.active,
     )
     await session.commit()
     await audit_service.log_event(
         session,
         event_type="agent.bulk_set_active",
-        tenant_id=admin.tenant_id,
+        tenant_id=tenant_id,
         user_id=admin.id,
         metadata={"count": updated, "active": payload.active, "ids": [str(i) for i in payload.ids]},
         request=request,
@@ -311,12 +322,13 @@ async def merge_agents(
     request: Request,
     payload: MergeAgentsRequest,
     admin: User = Depends(get_current_admin),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     try:
         counts = await agents_service.merge_into(
             session,
-            tenant_id=admin.tenant_id,
+            tenant_id=tenant_id,
             primary_id=payload.primary_id,
             duplicate_ids=payload.duplicate_ids,
         )
@@ -331,7 +343,7 @@ async def merge_agents(
     await audit_service.log_event(
         session,
         event_type="agent.merged",
-        tenant_id=admin.tenant_id,
+        tenant_id=tenant_id,
         user_id=admin.id,
         target_type="agent",
         target_id=payload.primary_id,
@@ -346,6 +358,7 @@ async def bulk_import_aliases(
     request: Request,
     file: UploadFile,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
     """
@@ -386,8 +399,8 @@ async def bulk_import_aliases(
         )
     idx = {name: i for i, name in enumerate(header)}
 
-    existing_agents = {a.full_name: a for a in await agents_service.list_agents(session, current_user.tenant_id)}
-    existing_aliases = {a.raw_agent for a in await agents_service.list_aliases(session, current_user.tenant_id)}
+    existing_agents = {a.full_name: a for a in await agents_service.list_agents(session, tenant_id)}
+    existing_aliases = {a.raw_agent for a in await agents_service.list_aliases(session, tenant_id)}
 
     created_agents = 0
     created_aliases = 0
@@ -418,7 +431,7 @@ async def bulk_import_aliases(
             try:
                 agent = await agents_service.create_agent(
                     session,
-                    tenant_id=current_user.tenant_id,
+                    tenant_id=tenant_id,
                     full_name=full_name,
                     email=email,
                     phone=phone,
@@ -432,13 +445,13 @@ async def bulk_import_aliases(
         try:
             await agents_service.create_alias(
                 session,
-                tenant_id=current_user.tenant_id,
+                tenant_id=tenant_id,
                 raw_agent=raw_agent,
                 agent_id=agent.id,
                 resolved_by_user_id=current_user.id,
             )
             await sales_service.backfill_agent_for_raw(
-                session, current_user.tenant_id, raw_agent, agent.id
+                session, tenant_id, raw_agent, agent.id
             )
             existing_aliases.add(raw_agent)
             created_aliases += 1
@@ -449,7 +462,7 @@ async def bulk_import_aliases(
     await audit_service.log_event(
         session,
         event_type="alias.agent.bulk_imported",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         metadata={
             "filename": filename,

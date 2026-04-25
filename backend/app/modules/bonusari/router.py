@@ -3,11 +3,12 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Query, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids
 from app.modules.bonusari import service as svc
 from app.modules.bonusari.schemas import (
     BonAgentRow,
@@ -17,10 +18,33 @@ from app.modules.bonusari.schemas import (
     BonRules,
     BonTier,
 )
+from app.modules.tenants.models import Organization
 
 router = APIRouter(prefix="/api/bonusari", tags=["bonusari"])
 
 _SCOPES = {"adp", "sika", "sikadp"}
+_SCOPE_TO_SLUG = {"adp": "adeplast", "sika": "sika"}
+
+
+async def _resolve_tenant_for_scope(
+    session: AsyncSession, org_ids: list[UUID], scope: str,
+) -> UUID:
+    """În SIKADP user-ul are 2 org_ids; alegem pe cel cu slug-ul matching.
+    Pentru scope='sikadp' returnam primul (service-ul face merging singur)."""
+    if len(org_ids) == 1:
+        return org_ids[0]
+    target_slug = _SCOPE_TO_SLUG.get(scope)
+    if target_slug:
+        res = await session.execute(
+            select(Organization.id).where(
+                Organization.id.in_(org_ids),
+                Organization.slug == target_slug,
+            )
+        )
+        match = res.scalar_one_or_none()
+        if match is not None:
+            return match
+    return org_ids[0]
 
 
 def _rules_to_model() -> BonRules:
@@ -98,7 +122,7 @@ async def get_bonusari(
         description="Ultima lună eligibilă (inclusiv). Default: luna curentă "
                     "(dacă year = anul curent) sau 12 (altfel).",
     ),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = scope.lower()
@@ -110,6 +134,8 @@ async def get_bonusari(
 
     now = datetime.now(timezone.utc)
     year_curr = year or now.year
+
+    tenant_id = await _resolve_tenant_for_scope(session, org_ids, scope)
 
     if scope == "adp":
         data = await svc.get_for_adp(session, tenant_id, year_curr=year_curr, month=month)

@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.api import APIRouter
 from app.core.db import get_session
 from app.modules.audit import service as audit_service
-from app.modules.auth.deps import get_current_tenant_id, get_current_user
+from app.modules.auth.deps import (
+    get_current_org_ids,
+    get_current_tenant_id,
+    get_current_user,
+)
 from app.modules.gallery import service as gallery_svc
 from app.modules.mkt_catalog import service as svc
 from app.modules.mkt_catalog.schemas import (
@@ -43,20 +47,20 @@ ALLOWED_CONTENT_TYPES = {
 
 @router.get("", response_model=MktCatalogResponse)
 async def list_catalog(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> MktCatalogResponse:
     """Compat cu ecranul placeholder (tests)."""
-    data = await svc.list_items(session, tenant_id)
+    data = await svc.list_items_by_tenants(session, org_ids)
     return MktCatalogResponse.model_validate(data)
 
 
 @router.get("/folders", response_model=CatalogFolderListResponse)
 async def list_folders(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> CatalogFolderListResponse:
-    folders = await svc.list_folders_with_cover(session, tenant_id)
+    folders = await svc.list_folders_with_cover_by_tenants(session, org_ids)
     notice = None
     if not folders:
         notice = 'Nu există încă cataloage — adaugă o lună nouă (buton „+ Lună Nouă").'
@@ -75,6 +79,7 @@ async def create_folder(
     request: Request,
     payload: CreateCatalogFolderRequest,
     current_user: User = Depends(get_current_user),
+    tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ) -> CatalogFolderOut:
     """Mirror peste `api_gallery_create_folder('catalog')`.
@@ -84,7 +89,7 @@ async def create_folder(
     try:
         folder = await gallery_svc.create_folder(
             session,
-            tenant_id=current_user.tenant_id,
+            tenant_id=tenant_id,
             type_=svc.GALLERY_TYPE,
             name=payload.name.strip(),
         )
@@ -97,7 +102,7 @@ async def create_folder(
     await audit_service.log_event(
         session,
         event_type="mkt_catalog.folder.created",
-        tenant_id=current_user.tenant_id,
+        tenant_id=tenant_id,
         user_id=current_user.id,
         target_type="gallery_folder",
         target_id=folder.id,
@@ -119,11 +124,18 @@ async def delete_folder(
     request: Request,
     folder_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Mirror peste `api_gallery_delete_folder('catalog', name)`."""
-    folder = await gallery_svc.get_folder(session, current_user.tenant_id, folder_id)
-    if folder is None or folder.type != svc.GALLERY_TYPE:
+    folder = None
+    owner_tenant_id: UUID | None = None
+    for tid in org_ids:
+        folder = await gallery_svc.get_folder(session, tid, folder_id)
+        if folder is not None and folder.type == svc.GALLERY_TYPE:
+            owner_tenant_id = tid
+            break
+    if folder is None or owner_tenant_id is None or folder.type != svc.GALLERY_TYPE:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "folder_not_found", "message": "Luna nu există"},
@@ -132,7 +144,7 @@ async def delete_folder(
     await audit_service.log_event(
         session,
         event_type="mkt_catalog.folder.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tenant_id,
         user_id=current_user.id,
         target_type="gallery_folder",
         target_id=folder_id,
@@ -150,16 +162,22 @@ async def delete_folder(
 )
 async def list_photos(
     folder_id: UUID,
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> CatalogFolderDetailResponse:
-    folder = await gallery_svc.get_folder(session, tenant_id, folder_id)
-    if folder is None or folder.type != svc.GALLERY_TYPE:
+    folder = None
+    owner_tenant_id: UUID | None = None
+    for tid in org_ids:
+        folder = await gallery_svc.get_folder(session, tid, folder_id)
+        if folder is not None and folder.type == svc.GALLERY_TYPE:
+            owner_tenant_id = tid
+            break
+    if folder is None or owner_tenant_id is None or folder.type != svc.GALLERY_TYPE:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "folder_not_found", "message": "Luna nu există"},
         )
-    photos = await svc.list_photos_for_folder(session, tenant_id, folder_id)
+    photos = await svc.list_photos_for_folder(session, owner_tenant_id, folder_id)
     return CatalogFolderDetailResponse(
         folder_id=folder.id,
         folder_name=folder.name,
@@ -178,6 +196,7 @@ async def upload_photo(
     folder_id: UUID,
     file: UploadFile,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> CatalogPhotoOut:
     """Mirror peste `api_gallery_upload('catalog', folder)`.
@@ -185,8 +204,14 @@ async def upload_photo(
     Legacy avea compresie Pillow + thumbnail; în SaaS păstrăm originalul
     (MinIO gestionează storage), iar thumb_url = url în response.
     """
-    folder = await gallery_svc.get_folder(session, current_user.tenant_id, folder_id)
-    if folder is None or folder.type != svc.GALLERY_TYPE:
+    folder = None
+    owner_tenant_id: UUID | None = None
+    for tid in org_ids:
+        folder = await gallery_svc.get_folder(session, tid, folder_id)
+        if folder is not None and folder.type == svc.GALLERY_TYPE:
+            owner_tenant_id = tid
+            break
+    if folder is None or owner_tenant_id is None or folder.type != svc.GALLERY_TYPE:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "folder_not_found", "message": "Luna nu există"},
@@ -219,7 +244,7 @@ async def upload_photo(
 
     photo = await gallery_svc.upload_photo(
         session,
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tenant_id,
         folder=folder,
         filename=file.filename or "untitled",
         content=content,
@@ -229,7 +254,7 @@ async def upload_photo(
     await audit_service.log_event(
         session,
         event_type="mkt_catalog.photo.uploaded",
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tenant_id,
         user_id=current_user.id,
         target_type="gallery_photo",
         target_id=photo.id,
@@ -259,17 +284,24 @@ async def delete_photo(
     request: Request,
     photo_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> None:
     """Mirror peste `api_gallery_delete_image('catalog', folder, filename)`."""
-    photo = await gallery_svc.get_photo(session, current_user.tenant_id, photo_id)
-    if photo is None:
+    photo = None
+    owner_tenant_id: UUID | None = None
+    for tid in org_ids:
+        photo = await gallery_svc.get_photo(session, tid, photo_id)
+        if photo is not None:
+            owner_tenant_id = tid
+            break
+    if photo is None or owner_tenant_id is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "photo_not_found", "message": "Poză inexistentă"},
         )
     # Siguranță: permitem ștergerea doar dacă folder-ul e de tip catalog
-    folder = await gallery_svc.get_folder(session, current_user.tenant_id, photo.folder_id)
+    folder = await gallery_svc.get_folder(session, owner_tenant_id, photo.folder_id)
     if folder is None or folder.type != svc.GALLERY_TYPE:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
@@ -280,7 +312,7 @@ async def delete_photo(
     await audit_service.log_event(
         session,
         event_type="mkt_catalog.photo.deleted",
-        tenant_id=current_user.tenant_id,
+        tenant_id=owner_tenant_id,
         user_id=current_user.id,
         target_type="gallery_photo",
         target_id=photo_id,

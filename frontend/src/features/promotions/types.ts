@@ -22,6 +22,7 @@ export interface PromotionIn {
   validFrom: string;  // YYYY-MM-DD
   validTo: string;
   clientFilter: string[] | null;
+  manualQuantities?: Record<string, string> | null;
   notes: string | null;
   targets: PromotionTargetIn[];
 }
@@ -36,6 +37,7 @@ export interface PromotionOut {
   validFrom: string;
   validTo: string;
   clientFilter: string[] | null;
+  manualQuantities: Record<string, string> | null;
   notes: string | null;
   targets: PromotionTargetOut[];
   createdAt: string;
@@ -86,6 +88,49 @@ export interface GroupsResponse {
 }
 
 
+export interface PromoSimProductRow {
+  productId: string;
+  code: string;
+  name: string;
+  categoryLabel: string | null;
+  groupLabel: string;
+  groupKind: string;
+  groupKey: string;
+  baselineQuantity: string;
+  suggestedQuantity: string;
+  usedQuantity: string;
+  isManual: boolean;
+  baselineUnitPrice: string;
+  baselineRevenue: string;
+  baselineCost: string;
+  baselineProfit: string;
+  baselineMarginPct: string;
+  scenarioRevenue: string;
+  scenarioCost: string;
+  scenarioProfit: string;
+  scenarioMarginPct: string;
+  deltaRevenue: string;
+  deltaProfit: string;
+  deltaMarginPp: string;
+}
+
+export interface PromoSimMonthlyRow {
+  year: number;
+  month: number;
+  monthLabel: string;
+  inPromoPeriod: boolean;
+  isProjected: boolean;
+  scopeBaselineRevenue: string;
+  scopeBaselineCost: string;
+  scopeBaselineProfit: string;
+  scopeBaselineMarginPct: string;
+  scopeScenarioRevenue: string;
+  scopeScenarioCost: string;
+  scopeScenarioProfit: string;
+  scopeScenarioMarginPct: string;
+}
+
+
 export interface PromoSimResponse {
   promotionId: string;
   baselineKind: BaselineKind;
@@ -103,5 +148,18 @@ export interface PromoSimResponse {
   deltaRevenue: string;
   deltaProfit: string;
   deltaMarginPp: string;
+  scopeBaselineRevenue: string;
+  scopeBaselineCost: string;
+  scopeBaselineProfit: string;
+  scopeBaselineMarginPct: string;
+  scopeScenarioRevenue: string;
+  scopeScenarioCost: string;
+  scopeScenarioProfit: string;
+  scopeScenarioMarginPct: string;
+  scopeDeltaRevenue: string;
+  scopeDeltaProfit: string;
+  scopeDeltaMarginPp: string;
   groups: PromoSimGroupRow[];
+  products: PromoSimProductRow[];
+  monthly: PromoSimMonthlyRow[];
 }

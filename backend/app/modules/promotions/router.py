@@ -19,6 +19,9 @@ from app.modules.promotions.schemas import (
     ProductSearchItem,
     ProductSearchResponse,
     PromoSimGroupRow,
+    PromoSimMonthlyRow,
+    PromoSimProductRow,
+    PromoSimRequest,
     PromoSimResponse,
     PromotionIn,
     PromotionListResponse,
@@ -88,6 +91,7 @@ async def _to_out(
         discount_type=promo.discount_type, value=promo.value,
         valid_from=promo.valid_from, valid_to=promo.valid_to,
         client_filter=promo.client_filter,
+        manual_quantities=promo.manual_quantities,
         notes=promo.notes,
         targets=[
             PromotionTargetOut(id=t.id, kind=t.kind, key=t.key)
@@ -224,6 +228,7 @@ async def create_promotion(
         discount_type=payload.discount_type, value=payload.value,
         valid_from=payload.valid_from, valid_to=payload.valid_to,
         client_filter=payload.client_filter,
+        manual_quantities=payload.manual_quantities,
         notes=payload.notes,
         targets=[t.model_dump() for t in payload.targets],
     )
@@ -266,6 +271,7 @@ async def update_promotion(
             "discount_type": payload.discount_type, "value": payload.value,
             "valid_from": payload.valid_from, "valid_to": payload.valid_to,
             "client_filter": payload.client_filter or None,
+            "manual_quantities": payload.manual_quantities or None,
             "notes": payload.notes,
         },
         targets=[t.model_dump() for t in payload.targets],
@@ -318,19 +324,25 @@ async def delete_promotion(
 @router.post("/{promo_id}/simulate", response_model=PromoSimResponse)
 async def simulate(
     promo_id: UUID,
-    baseline: str = Query("yoy", description="'yoy' | 'mom'"),
+    payload: PromoSimRequest | None = None,
+    baseline: str = Query("yoy", description="'yoy' | 'mom' (fallback daca body.baseline_kind lipseste)"),
     org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ) -> PromoSimResponse:
-    if baseline not in svc.BASELINE_KINDS:
+    # Body has priority over query param so frontend poate trimite tot in body.
+    baseline_kind = (payload.baseline_kind if payload else None) or baseline
+    if baseline_kind not in svc.BASELINE_KINDS:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             detail={"code": "invalid_baseline", "message": "baseline trebuie 'yoy' sau 'mom'"},
         )
+    override = payload.manual_quantities if payload else None
     data = None
     for tid in org_ids:
         data = await svc.simulate(
-            session, tenant_id=tid, promo_id=promo_id, baseline_kind=baseline,
+            session, tenant_id=tid, promo_id=promo_id,
+            baseline_kind=baseline_kind,
+            manual_quantities_override=override,
         )
         if data is not None:
             break
@@ -355,5 +367,18 @@ async def simulate(
         delta_revenue=data["delta_revenue"],
         delta_profit=data["delta_profit"],
         delta_margin_pp=data["delta_margin_pp"],
+        scope_baseline_revenue=data["scope_baseline_revenue"],
+        scope_baseline_cost=data["scope_baseline_cost"],
+        scope_baseline_profit=data["scope_baseline_profit"],
+        scope_baseline_margin_pct=data["scope_baseline_margin_pct"],
+        scope_scenario_revenue=data["scope_scenario_revenue"],
+        scope_scenario_cost=data["scope_scenario_cost"],
+        scope_scenario_profit=data["scope_scenario_profit"],
+        scope_scenario_margin_pct=data["scope_scenario_margin_pct"],
+        scope_delta_revenue=data["scope_delta_revenue"],
+        scope_delta_profit=data["scope_delta_profit"],
+        scope_delta_margin_pp=data["scope_delta_margin_pp"],
         groups=[PromoSimGroupRow(**g) for g in data["groups"]],
+        products=[PromoSimProductRow(**p) for p in data["products"]],
+        monthly=[PromoSimMonthlyRow(**mr) for mr in data["monthly"]],
     )

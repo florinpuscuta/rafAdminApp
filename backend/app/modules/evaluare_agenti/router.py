@@ -479,19 +479,19 @@ async def get_salariu_bonus_annual(
 
 @router.get("/facturi-bonus/pending-count", response_model=FacturaBonusPendingCount)
 async def get_facturi_bonus_pending_count(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    data = await svc.get_facturi_bonus_pending_count(session, tenant_id)
+    data = await svc.get_facturi_bonus_pending_count_by_tenants(session, org_ids)
     return FacturaBonusPendingCount(**data)
 
 
 @router.get("/facturi-bonus", response_model=FacturaBonusList)
 async def list_facturi_bonus(
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    data = await svc.list_facturi_bonus_pending(session, tenant_id)
+    data = await svc.list_facturi_bonus_pending_by_tenants(session, org_ids)
     return FacturaBonusList(
         rows=[FacturaBonusRow(**r) for r in data["rows"]],
         pending_count=data["pending_count"],
@@ -505,10 +505,10 @@ async def list_facturi_bonus(
 @router.post("/facturi-bonus/accept", response_model=FacturaBonusAcceptResponse)
 async def accept_facturi_bonus(
     payload: FacturaBonusAcceptRequest,
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await svc.accept_facturi_bonus(session, tenant_id, payload.ids)
+    result = await svc.accept_facturi_bonus_by_tenants(session, org_ids, payload.ids)
     await session.commit()
     return FacturaBonusAcceptResponse(**result)
 
@@ -516,10 +516,10 @@ async def accept_facturi_bonus(
 @router.post("/facturi-bonus/unassign", response_model=FacturaBonusUnassignResponse)
 async def unassign_facturi_bonus(
     payload: FacturaBonusUnassignRequest,
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
-    result = await svc.unassign_facturi_bonus(session, tenant_id, payload.ids)
+    result = await svc.unassign_facturi_bonus_by_tenants(session, org_ids, payload.ids)
     await session.commit()
     return FacturaBonusUnassignResponse(**result)
 

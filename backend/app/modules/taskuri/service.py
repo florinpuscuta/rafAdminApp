@@ -30,6 +30,23 @@ async def list_tasks(
     due_from: date | None = None,
     due_to: date | None = None,
 ) -> list[dict]:
+    """Wrapper single-tenant; foloseste list_tasks_by_tenants."""
+    return await list_tasks_by_tenants(
+        session, [tenant_id],
+        status=status, agent_id=agent_id,
+        due_from=due_from, due_to=due_to,
+    )
+
+
+async def list_tasks_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    *,
+    status: str | None = None,
+    agent_id: UUID | None = None,
+    due_from: date | None = None,
+    due_to: date | None = None,
+) -> list[dict]:
     """Returnează lista de task-uri cu assignees denormalizați.
 
     Filtre opționale:
@@ -37,7 +54,9 @@ async def list_tasks(
       - agent_id: task-uri unde agent-ul apare ca asignat
       - due_from / due_to: interval pe due_date (inclusiv)
     """
-    q = select(Task).where(Task.tenant_id == tenant_id)
+    if not tenant_ids:
+        return []
+    q = select(Task).where(Task.tenant_id.in_(tenant_ids))
     if status:
         q = q.where(Task.status == status.upper())
     if due_from is not None:

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id
+from app.modules.auth.deps import get_current_org_ids
 from app.modules.marca_privata import service as svc
 from app.modules.marca_privata.schemas import (
     MPCategoryCell,
@@ -90,7 +90,7 @@ def _build_response(data: svc.MarcaPrivataData) -> MPResponse:
 async def get_marca_privata(
     scope: str = Query("adp", description="'adp' (momentan doar ADP)"),
     year: int | None = Query(None, ge=2000, le=2100),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = scope.lower()
@@ -106,5 +106,5 @@ async def get_marca_privata(
     now = datetime.now(timezone.utc)
     year_curr = year or now.year
 
-    data = await svc.get_for_adp(session, tenant_id, year_curr=year_curr)
+    data = await svc.get_for_adp_by_tenants(session, org_ids, year_curr=year_curr)
     return _build_response(data)

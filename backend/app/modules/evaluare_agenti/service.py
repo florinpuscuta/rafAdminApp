@@ -1746,26 +1746,35 @@ async def get_facturi_bonus_pending_count(
     session: AsyncSession, tenant_id: UUID,
 ) -> dict:
     """Versiune lightweight pentru polling — doar count + amount, fără rows/joins."""
-    stmt = select(
-        RawSale.year, RawSale.month, RawSale.client, RawSale.amount,
-    ).where(
-        RawSale.tenant_id == tenant_id,
-        _facturi_bonus_filter(),
-    )
-    rows = (await session.execute(stmt)).all()
-    decisions = await _load_decisions_map(session, tenant_id)
+    return await get_facturi_bonus_pending_count_by_tenants(session, [tenant_id])
 
+
+async def get_facturi_bonus_pending_count_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> dict:
+    """Multi-org: agreguez count+amount peste toate org_ids."""
+    if not tenant_ids:
+        return {"pending_count": 0, "pending_amount": Decimal("0")}
     pending_count = 0
     pending_amount = Decimal("0")
-    for year, month, client, amount in rows:
-        chain = _chain_of(client or "")
-        key = (year, month, client or "", amount)
-        decision = decisions.get(key)
-        if chain is None and decision is None:
-            continue
-        if decision is None:
-            pending_count += 1
-            pending_amount += amount
+    for tid in tenant_ids:
+        stmt = select(
+            RawSale.year, RawSale.month, RawSale.client, RawSale.amount,
+        ).where(
+            RawSale.tenant_id == tid,
+            _facturi_bonus_filter(),
+        )
+        rows = (await session.execute(stmt)).all()
+        decisions = await _load_decisions_map(session, tid)
+        for year, month, client, amount in rows:
+            chain = _chain_of(client or "")
+            key = (year, month, client or "", amount)
+            decision = decisions.get(key)
+            if chain is None and decision is None:
+                continue
+            if decision is None:
+                pending_count += 1
+                pending_amount += amount
     return {"pending_count": pending_count, "pending_amount": pending_amount}
 
 
@@ -1773,6 +1782,46 @@ async def list_facturi_bonus_pending(
     session: AsyncSession, tenant_id: UUID,
 ) -> dict:
     """Returnează toate facturile sub threshold: pending (roșu) + assigned (verde)."""
+    return await list_facturi_bonus_pending_by_tenants(session, [tenant_id])
+
+
+async def list_facturi_bonus_pending_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> dict:
+    """Multi-org variant. Concateneaza rows + agreguez totalurile per org."""
+    if not tenant_ids:
+        return {
+            "rows": [], "pending_count": 0, "pending_amount": Decimal("0"),
+            "assigned_count": 0, "assigned_amount": Decimal("0"),
+            "threshold": FACTURI_BONUS_THRESHOLD,
+        }
+    all_rows: list[dict] = []
+    pending_count_total = 0
+    pending_amount_total = Decimal("0")
+    assigned_count_total = 0
+    assigned_amount_total = Decimal("0")
+    for tid in tenant_ids:
+        single = await _list_facturi_bonus_pending_single(session, tid)
+        all_rows.extend(single["rows"])
+        pending_count_total += single["pending_count"]
+        pending_amount_total += single["pending_amount"]
+        assigned_count_total += single["assigned_count"]
+        assigned_amount_total += single["assigned_amount"]
+    # Sortare globala dupa amount asc (cum era originalul)
+    all_rows.sort(key=lambda r: r["amount"])
+    return {
+        "rows": all_rows,
+        "pending_count": pending_count_total,
+        "pending_amount": pending_amount_total,
+        "assigned_count": assigned_count_total,
+        "assigned_amount": assigned_amount_total,
+        "threshold": FACTURI_BONUS_THRESHOLD,
+    }
+
+
+async def _list_facturi_bonus_pending_single(
+    session: AsyncSession, tenant_id: UUID,
+) -> dict:
     target_agent = await _resolve_target_agent(session, tenant_id)
     centrala = await _resolve_centrala_stores(session, tenant_id)
     decisions = await _load_decisions_map(session, tenant_id)
@@ -1957,6 +2006,34 @@ async def apply_facturi_bonus_rule_all(
     return {"accepted": accepted, "skipped": skipped}
 
 
+async def accept_facturi_bonus_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    ids: list[UUID],
+) -> dict:
+    """Multi-org: ruleaza accept pe toate org_ids si agreguez rezultatele."""
+    if not ids or not tenant_ids:
+        return {"accepted": 0, "skipped": len(ids)}
+    accepted_total = 0
+    skipped_total = 0
+    seen_count = 0
+    for tid in tenant_ids:
+        # Cate dintre ids apartin acestui tenant
+        stmt_check = select(RawSale.id).where(
+            RawSale.tenant_id == tid,
+            RawSale.id.in_(ids),
+        )
+        tenant_ids_subset = [r[0] for r in (await session.execute(stmt_check)).all()]
+        if not tenant_ids_subset:
+            continue
+        seen_count += len(tenant_ids_subset)
+        single = await accept_facturi_bonus(session, tid, tenant_ids_subset)
+        accepted_total += single["accepted"]
+        skipped_total += single["skipped"]
+    skipped_total += len(ids) - seen_count
+    return {"accepted": accepted_total, "skipped": skipped_total}
+
+
 async def accept_facturi_bonus(
     session: AsyncSession,
     tenant_id: UUID,
@@ -2006,6 +2083,33 @@ async def accept_facturi_bonus(
         accepted += 1
     skipped += len(ids) - len(rows)
     return {"accepted": accepted, "skipped": skipped}
+
+
+async def unassign_facturi_bonus_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
+    ids: list[UUID],
+) -> dict:
+    """Multi-org: ruleaza unassign pe toate org_ids."""
+    if not ids or not tenant_ids:
+        return {"unassigned": 0, "skipped": len(ids)}
+    unassigned_total = 0
+    skipped_total = 0
+    seen_count = 0
+    for tid in tenant_ids:
+        stmt_check = select(RawSale.id).where(
+            RawSale.tenant_id == tid,
+            RawSale.id.in_(ids),
+        )
+        tenant_ids_subset = [r[0] for r in (await session.execute(stmt_check)).all()]
+        if not tenant_ids_subset:
+            continue
+        seen_count += len(tenant_ids_subset)
+        single = await unassign_facturi_bonus(session, tid, tenant_ids_subset)
+        unassigned_total += single["unassigned"]
+        skipped_total += single["skipped"]
+    skipped_total += len(ids) - seen_count
+    return {"unassigned": unassigned_total, "skipped": skipped_total}
 
 
 async def unassign_facturi_bonus(

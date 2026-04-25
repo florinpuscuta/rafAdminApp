@@ -26,15 +26,17 @@ def _ka_filter():
     return func.upper(RawSale.channel) == ANALYTICS_CHANNEL
 
 
-async def list_all_by_tenant(
+async def list_all_by_tenants(
     session: AsyncSession,
-    tenant_id: UUID,
+    tenant_ids: list[UUID],
     *,
     year: int | None = None,
     month: int | None = None,
 ) -> list[RawSale]:
-    """Fără paginare — pentru export Excel."""
-    filters = [RawSale.tenant_id == tenant_id]
+    """Fără paginare — pentru export Excel. Multi-org via IN filter."""
+    if not tenant_ids:
+        return []
+    filters = [RawSale.tenant_id.in_(tenant_ids)]
     if year is not None:
         filters.append(RawSale.year == year)
     if month is not None:
@@ -47,9 +49,22 @@ async def list_all_by_tenant(
     return list((await session.execute(stmt)).scalars().all())
 
 
-async def list_by_tenant(
+async def list_all_by_tenant(
     session: AsyncSession,
     tenant_id: UUID,
+    *,
+    year: int | None = None,
+    month: int | None = None,
+) -> list[RawSale]:
+    """Single-tenant wrapper (compat)."""
+    return await list_all_by_tenants(
+        session, [tenant_id], year=year, month=month,
+    )
+
+
+async def list_by_tenants(
+    session: AsyncSession,
+    tenant_ids: list[UUID],
     *,
     page: int = 1,
     page_size: int = 50,
@@ -60,8 +75,10 @@ async def list_by_tenant(
 ) -> tuple[list[RawSale], int]:
     page = max(1, page)
     page_size = max(1, min(page_size, 500))
+    if not tenant_ids:
+        return [], 0
 
-    filters = [RawSale.tenant_id == tenant_id, _ka_filter()]
+    filters = [RawSale.tenant_id.in_(tenant_ids), _ka_filter()]
     if store_id is not None:
         filters.append(RawSale.store_id == store_id)
     if agent_id is not None:
@@ -83,6 +100,25 @@ async def list_by_tenant(
     )
     items = list((await session.execute(stmt)).scalars().all())
     return items, total
+
+
+async def list_by_tenant(
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    store_id: UUID | None = None,
+    agent_id: UUID | None = None,
+    product_id: UUID | None = None,
+    year: int | None = None,
+) -> tuple[list[RawSale], int]:
+    """Single-tenant wrapper (compat)."""
+    return await list_by_tenants(
+        session, [tenant_id],
+        page=page, page_size=page_size,
+        store_id=store_id, agent_id=agent_id, product_id=product_id, year=year,
+    )
 
 
 async def create_batch(
@@ -230,14 +266,22 @@ async def delete_all_raw_sales(
     return result.rowcount or 0
 
 
-async def list_batches(session: AsyncSession, tenant_id: UUID) -> list[ImportBatch]:
+async def list_batches_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[ImportBatch]:
+    if not tenant_ids:
+        return []
     stmt = (
         select(ImportBatch)
-        .where(ImportBatch.tenant_id == tenant_id)
+        .where(ImportBatch.tenant_id.in_(tenant_ids))
         .order_by(ImportBatch.created_at.desc())
     )
     result = await session.execute(stmt)
     return list(result.scalars().all())
+
+
+async def list_batches(session: AsyncSession, tenant_id: UUID) -> list[ImportBatch]:
+    return await list_batches_by_tenants(session, [tenant_id])
 
 
 async def delete_batch(
@@ -258,17 +302,25 @@ async def delete_batch(
 async def list_clients_without_store(
     session: AsyncSession, tenant_id: UUID
 ) -> list[tuple[str, int, Decimal]]:
+    return await list_clients_without_store_by_tenants(session, [tenant_id])
+
+
+async def list_clients_without_store_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[tuple[str, int, Decimal]]:
     """
     Returnează [(raw_client, row_count, total_amount), ...] pentru rândurile
     care încă nu au fost legate de un Store canonic. Folosit de UI "Unmapped".
     """
+    if not tenant_ids:
+        return []
     stmt = (
         select(
             RawSale.client,
             func.count(RawSale.id).label("row_count"),
             func.coalesce(func.sum(RawSale.amount), 0).label("total_amount"),
         )
-        .where(RawSale.tenant_id == tenant_id, RawSale.store_id.is_(None))
+        .where(RawSale.tenant_id.in_(tenant_ids), RawSale.store_id.is_(None))
         .group_by(RawSale.client)
         .order_by(func.count(RawSale.id).desc())
     )
@@ -299,10 +351,18 @@ async def backfill_store_for_client(
 async def list_agents_without_canonical(
     session: AsyncSession, tenant_id: UUID
 ) -> list[tuple[str, int, Decimal]]:
+    return await list_agents_without_canonical_by_tenants(session, [tenant_id])
+
+
+async def list_agents_without_canonical_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[tuple[str, int, Decimal]]:
     """
     [(raw_agent, row_count, total_amount), ...] pentru rândurile cu `agent`
     NOT NULL dar fără agent canonic asociat. Folosit de UI "Unmapped agenți".
     """
+    if not tenant_ids:
+        return []
     stmt = (
         select(
             RawSale.agent,
@@ -310,7 +370,7 @@ async def list_agents_without_canonical(
             func.coalesce(func.sum(RawSale.amount), 0).label("total_amount"),
         )
         .where(
-            RawSale.tenant_id == tenant_id,
+            RawSale.tenant_id.in_(tenant_ids),
             RawSale.agent.is_not(None),
             RawSale.agent_id.is_(None),
         )
@@ -377,11 +437,19 @@ async def clear_product_for_raw(
 async def list_products_without_canonical(
     session: AsyncSession, tenant_id: UUID
 ) -> list[tuple[str, str | None, int, Decimal]]:
+    return await list_products_without_canonical_by_tenants(session, [tenant_id])
+
+
+async def list_products_without_canonical_by_tenants(
+    session: AsyncSession, tenant_ids: list[UUID],
+) -> list[tuple[str, str | None, int, Decimal]]:
     """
     [(raw_code, sample_name, row_count, total_amount), ...] pentru rândurile
     cu product_code NOT NULL și product_id NULL. `sample_name` e un
     product_name găsit pentru orientare vizuală.
     """
+    if not tenant_ids:
+        return []
     stmt = (
         select(
             RawSale.product_code,
@@ -390,7 +458,7 @@ async def list_products_without_canonical(
             func.coalesce(func.sum(RawSale.amount), 0),
         )
         .where(
-            RawSale.tenant_id == tenant_id,
+            RawSale.tenant_id.in_(tenant_ids),
             RawSale.product_code.is_not(None),
             RawSale.product_id.is_(None),
         )

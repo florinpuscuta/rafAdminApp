@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
-from app.modules.auth.deps import get_current_tenant_id, get_current_user
+from app.modules.auth.deps import get_current_org_ids, get_current_tenant_id, get_current_user
 from app.modules.probleme import service as svc
 from app.modules.probleme.schemas import ProblemeResponse, ProblemeSaveRequest
 from app.modules.users.models import User
@@ -62,12 +62,14 @@ async def get_probleme(
     year: int | None = Query(None, ge=2000, le=2100),
     month: int | None = Query(None, ge=1, le=12),
     scope: str = Query("adp"),
-    tenant_id: UUID = Depends(get_current_tenant_id),
+    org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
     scope = _check_scope(scope)
     y, m = _parse_period(period, year, month)
-    data = await svc.get_probleme(session, tenant_id, scope=scope, year=y, month=m)
+    data = await svc.get_probleme_by_tenants(
+        session, org_ids, scope=scope, year=y, month=m,
+    )
     return ProblemeResponse(**data)
 
 

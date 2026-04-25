@@ -30,6 +30,9 @@ async def generate_raport_word(
     tenant_id: UUID = Depends(get_current_tenant_id),
     session: AsyncSession = Depends(get_session),
 ):
+    """Generare per orga activa (resolved via X-Active-Org-Id header).
+    In SIKADP consolidated mode pickeaza orga default; UI-ul indicator banner.
+    """
     req = body or RapoartWordRequest()
     docx_bytes, filename = await svc.generate_docx(
         session, tenant_id,
