@@ -77,10 +77,43 @@ async def get_current_user(
     return user
 
 
-async def get_current_tenant_id(user: User = Depends(get_current_user)) -> UUID:
-    """Returnează tenant_id-ul user-ului curent. Folosit de orice modul
-    care query-uie date tenant-scoped."""
-    return user.tenant_id
+async def get_current_tenant_id(
+    request: Request,
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> UUID:
+    """Returneaza organization_id-ul ACTIV pentru request-ul curent.
+
+    Logica:
+      1. Daca exista header `X-Active-Org-Id` si user e membru → folosim acel
+         organization_id (switch multi-org stateless).
+      2. Altfel: fallback la `users.tenant_id` (orga default a userului).
+
+    Refuzam (403) daca header e prezent dar user NU e membru in acea orga.
+    """
+    requested = request.headers.get("x-active-org-id")
+    if not requested:
+        return user.tenant_id
+    try:
+        requested_id = UUID(requested)
+    except ValueError:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            detail={"code": "invalid_org_id", "message": "X-Active-Org-Id invalid"},
+        )
+    if requested_id == user.tenant_id:
+        return requested_id
+    # Verificam membership
+    if not await users_service.is_member(session, user.id, requested_id):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            detail={
+                "code": "not_member",
+                "message": "Nu esti membru al acestei organizatii",
+            },
+        )
+    bind_request_context(user_id=str(user.id), tenant_id=str(requested_id))
+    return requested_id
 
 
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:

@@ -108,3 +108,45 @@ async def update_user(
 async def delete_user(session: AsyncSession, user: User) -> None:
     await session.delete(user)
     await session.commit()
+
+
+# ─── Memberships (multi-org) ────────────────────────────────────────────────
+
+from app.modules.users.models import UserOrganizationMembership  # noqa: E402
+
+
+async def list_user_memberships(
+    session: AsyncSession, user_id: UUID,
+) -> list[UserOrganizationMembership]:
+    res = await session.execute(
+        select(UserOrganizationMembership)
+        .where(UserOrganizationMembership.user_id == user_id)
+        .order_by(UserOrganizationMembership.is_default.desc(),
+                  UserOrganizationMembership.joined_at)
+    )
+    return list(res.scalars().all())
+
+
+async def is_member(
+    session: AsyncSession, user_id: UUID, organization_id: UUID,
+) -> bool:
+    res = await session.execute(
+        select(UserOrganizationMembership.user_id).where(
+            UserOrganizationMembership.user_id == user_id,
+            UserOrganizationMembership.organization_id == organization_id,
+        ).limit(1)
+    )
+    return res.scalar_one_or_none() is not None
+
+
+async def get_default_membership_org(
+    session: AsyncSession, user_id: UUID,
+) -> UUID | None:
+    """Returneaza organization_id-ul membership-ului cu is_default=true."""
+    res = await session.execute(
+        select(UserOrganizationMembership.organization_id).where(
+            UserOrganizationMembership.user_id == user_id,
+            UserOrganizationMembership.is_default.is_(True),
+        ).limit(1)
+    )
+    return res.scalar_one_or_none()

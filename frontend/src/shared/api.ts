@@ -1,6 +1,17 @@
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:8000";
 const TOKEN_KEY = "adeplast_token";
 const REFRESH_KEY = "adeplast_refresh";
+const ACTIVE_ORG_KEY = "adeplast_active_org";
+
+
+export function getActiveOrgId(): string | null {
+  return localStorage.getItem(ACTIVE_ORG_KEY);
+}
+
+export function setActiveOrgId(orgId: string | null): void {
+  if (orgId) localStorage.setItem(ACTIVE_ORG_KEY, orgId);
+  else localStorage.removeItem(ACTIVE_ORG_KEY);
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -97,11 +108,13 @@ async function parseErr(resp: Response): Promise<ApiError> {
 
 async function rawFetch(path: string, options: RequestInit = {}): Promise<Response> {
   const token = getToken();
+  const activeOrg = getActiveOrgId();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...(options.headers as Record<string, string> | undefined),
   };
   if (token) headers.Authorization = `Bearer ${token}`;
+  if (activeOrg) headers["X-Active-Org-Id"] = activeOrg;
   return fetch(`${API_URL}${path}`, { ...options, headers });
 }
 

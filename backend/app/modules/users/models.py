@@ -69,6 +69,35 @@ class User(Base):
     )
 
 
+class UserOrganizationMembership(Base):
+    """Multi-org membership: un user poate apartine la N organizatii.
+
+    Tablul e populat la signup/invite. `is_default=True` marcheaza orga
+    "principala" a userului (fallback cand nu trimite X-Active-Org-Id header).
+    """
+    __tablename__ = "user_organization_memberships"
+
+    user_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    organization_id: Mapped[UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("organizations.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    role_v2: Mapped[UserRole] = mapped_column(
+        _user_role_pg, nullable=False, default=UserRole.VIEWER,
+    )
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False,
+    )
+    joined_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
 class UserManagedAgent(Base):
     """Asociere user (regional_manager) <-> agenti supravegheati.
 

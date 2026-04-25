@@ -1,9 +1,14 @@
+from uuid import UUID
+
 from fastapi import Depends, HTTPException, Request, UploadFile, status
+from pydantic import Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
 from app.core.rate_limit import limiter
+from app.core.schemas import APISchema
 from app.modules.audit import service as audit_service
 from app.modules.auth import service as auth_service
 from app.modules.auth.deps import get_current_admin, get_current_user
@@ -121,6 +126,55 @@ async def login(
 @router.get("/me", response_model=UserOut)
 async def me(user: User = Depends(get_current_user)):
     return UserOut.model_validate(user)
+
+
+from app.modules.tenants.models import Organization  # noqa: E402
+from app.modules.users import service as users_service  # noqa: E402
+
+
+class OrganizationMembershipOut(APISchema):
+    organization_id: UUID
+    name: str
+    slug: str
+    kind: str
+    role_v2: str
+    is_default: bool
+
+
+class MembershipsResponse(APISchema):
+    items: list[OrganizationMembershipOut] = Field(default_factory=list)
+
+
+@router.get("/me/organizations", response_model=MembershipsResponse)
+async def my_organizations(
+    user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_session),
+) -> MembershipsResponse:
+    """Listează organizațiile la care e membru user-ul curent.
+
+    Frontend folosește răspunsul ca să afișeze switcher-ul "Adeplast / Sika /
+    Sikadp" și trimite `X-Active-Org-Id` la următoarele request-uri.
+    """
+    memberships = await users_service.list_user_memberships(session, user.id)
+    org_ids = [m.organization_id for m in memberships]
+    if not org_ids:
+        return MembershipsResponse(items=[])
+    res = await session.execute(
+        select(Organization).where(Organization.id.in_(org_ids))
+    )
+    org_by_id = {o.id: o for o in res.scalars().all()}
+    items = []
+    for m in memberships:
+        org = org_by_id.get(m.organization_id)
+        if org is None:
+            continue
+        items.append(OrganizationMembershipOut(
+            organization_id=m.organization_id,
+            name=org.name, slug=org.slug, kind=org.kind.value,
+            role_v2=m.role_v2.value if hasattr(m.role_v2, "value") else m.role_v2,
+            is_default=m.is_default,
+        ))
+    return MembershipsResponse(items=items)
 
 
 @router.post("/refresh", response_model=TokenPair)
