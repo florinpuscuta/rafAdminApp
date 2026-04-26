@@ -47,7 +47,7 @@ def sample_row(
     product_code: str | None = "SKU-001",
     product_name: str | None = "Adeziv Placi",
     agent: str | None = "Ionut Filip",
-    channel: str | None = "retail",
+    channel: str | None = "KA",
     category_code: str | None = "A1",
     quantity: Decimal | float | int | None = 10,
 ) -> dict[str, Any]:

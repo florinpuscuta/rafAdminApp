@@ -1,97 +1,63 @@
-"""Teste pentru /api/demo/seed + /api/demo/wipe."""
+"""Teste pentru /api/demo/wipe.
+
+Endpoint-ul /api/demo/seed a fost eliminat (commit 8c75c89 — refactor:
+remove seed_demo_data — no more synthetic agents). Aceste teste acopera
+doar /wipe, singurul rămas. Datele sunt create manual via /api/sales/import
+ca să verifice că wipe le șterge corect.
+"""
 from __future__ import annotations
 
 import pytest
 from httpx import AsyncClient
 
+from tests._helpers import make_xlsx, sample_row
+
 
 pytestmark = pytest.mark.asyncio
 
 
-async def test_seed_happy_path(client: AsyncClient, admin_ctx):
-    resp = await client.post("/api/demo/seed", headers=admin_ctx["headers"])
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    # Valorile exacte din seed — au fost definite deterministic (Random(42))
-    assert body["stores"] == 7
-    assert body["agents"] == 5
-    assert body["products"] == 12
-    assert body["sales"] >= 40 * 12  # minim 40/lună × 12 luni
-    assert body["sales"] <= 50 * 12
-    assert body["assignments"] > 0
-
-
-async def test_seed_populates_canonicals_visible_via_listing(client: AsyncClient, admin_ctx):
-    """După seed, GET /api/stores/agents/products întoarce datele."""
-    await client.post("/api/demo/seed", headers=admin_ctx["headers"])
-
-    stores = await client.get("/api/stores", headers=admin_ctx["headers"])
-    assert len(stores.json()) == 7
-    names = {s["name"] for s in stores.json()}
-    assert "Dedeman Bucuresti Pipera" in names
-
-    agents = await client.get("/api/agents", headers=admin_ctx["headers"])
-    assert len(agents.json()) == 5
-
-    products = await client.get("/api/products", headers=admin_ctx["headers"])
-    assert len(products.json()) == 12
-
-
-async def test_seed_refuses_if_tenant_not_empty(client: AsyncClient, admin_ctx):
-    """Al doilea seed consecutiv returnează 409."""
-    r1 = await client.post("/api/demo/seed", headers=admin_ctx["headers"])
-    assert r1.status_code == 200
-
-    r2 = await client.post("/api/demo/seed", headers=admin_ctx["headers"])
-    assert r2.status_code == 409
-    assert r2.json()["detail"]["code"] == "tenant_not_empty"
-
-
-async def test_seed_requires_admin(client: AsyncClient):
+async def test_wipe_requires_auth(client: AsyncClient):
     """Fără auth → 401."""
-    resp = await client.post("/api/demo/seed")
+    resp = await client.post("/api/demo/wipe")
     assert resp.status_code == 401
 
 
-async def test_seed_tenant_isolation(client: AsyncClient, signup_user):
-    """Seed pe tenant A NU afectează tenant B."""
-    a = await signup_user(tenant_name="Alpha Corp")
-    b = await signup_user(tenant_name="Beta Corp")
-
-    await client.post("/api/demo/seed", headers=a["headers"])
-
-    # Tenant B rămâne gol
-    stores_b = await client.get("/api/stores", headers=b["headers"])
-    assert stores_b.json() == []
-
-
-async def test_wipe_clears_all_data_keeps_users(client: AsyncClient, admin_ctx):
-    """Wipe șterge vânzări + canonicals + aliases + batches. Users + tenant rămân."""
-    await client.post("/api/demo/seed", headers=admin_ctx["headers"])
+async def test_wipe_clears_data_keeps_users(client: AsyncClient, admin_ctx):
+    """Wipe șterge vânzări + entități canonice. Users + organizația rămân."""
+    # Importăm câteva rânduri ca să avem ceva de șters.
+    rows = [sample_row(client="DEDEMAN PITESTI", amount=1000)]
+    xlsx = make_xlsx(rows)
+    imp = await client.post(
+        "/api/sales/import",
+        headers=admin_ctx["headers"],
+        files={"file": ("seed.xlsx", xlsx, "application/octet-stream")},
+    )
+    assert imp.status_code == 200, imp.text
 
     resp = await client.post("/api/demo/wipe", headers=admin_ctx["headers"])
     assert resp.status_code == 200
     body = resp.json()
-    assert body["stores"] == 7
-    assert body["agents"] == 5
-    assert body["products"] == 12
-    assert body["sales"] > 0
+    # Cel puțin sales-ul importat e șters; numerele exacte depind de stage-ul
+    # de canonicalizare automată — nu le fixăm rigid.
+    assert body["sales"] >= 1
 
-    # Totul gol acum
-    assert (await client.get("/api/stores", headers=admin_ctx["headers"])).json() == []
-    assert (await client.get("/api/agents", headers=admin_ctx["headers"])).json() == []
-    assert (await client.get("/api/products", headers=admin_ctx["headers"])).json() == []
+    # Toate listările întorc liste goale.
+    stores = await client.get("/api/stores", headers=admin_ctx["headers"])
+    assert stores.json() == []
+    agents = await client.get("/api/agents", headers=admin_ctx["headers"])
+    assert agents.json() == []
+    products = await client.get("/api/products", headers=admin_ctx["headers"])
+    assert products.json() == []
 
-    # Userul curent încă e logat / accesibil
+    # Userul curent încă e funcțional.
     me = await client.get("/api/auth/me", headers=admin_ctx["headers"])
     assert me.status_code == 200
 
 
-async def test_seed_after_wipe_works(client: AsyncClient, admin_ctx):
-    """După wipe, se poate seed din nou (validare reset cycle complet)."""
-    await client.post("/api/demo/seed", headers=admin_ctx["headers"])
-    await client.post("/api/demo/wipe", headers=admin_ctx["headers"])
-
-    r = await client.post("/api/demo/seed", headers=admin_ctx["headers"])
-    assert r.status_code == 200
-    assert r.json()["stores"] == 7
+async def test_wipe_on_empty_tenant(client: AsyncClient, admin_ctx):
+    """Wipe pe tenant gol nu eșuează — întoarce zero-uri."""
+    resp = await client.post("/api/demo/wipe", headers=admin_ctx["headers"])
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["sales"] == 0
+    assert body["stores"] == 0

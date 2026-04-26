@@ -23,6 +23,9 @@ import os
 # le citească la construcție. pydantic-settings face cache după prima instanță.
 os.environ["APP_ENV"] = "test"
 os.environ["JWT_SECRET"] = "test-secret-key-do-not-use-in-prod"
+# Cache Redis dezactivat în teste — fiecare test rulează izolat și nu vrem
+# rezultate stale din rulări anterioare.
+os.environ["CACHE_ENABLED"] = "False"
 # Host-ul Postgres: `db` în container (docker-compose), `localhost` pe CI/host.
 _DB_HOST = os.environ.get("TEST_DB_HOST", "db")
 # Override FORCED — nu `setdefault` (ar păstra DATABASE_URL din .env care pointă la prod DB)
