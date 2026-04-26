@@ -6,7 +6,9 @@ import {
 } from "react";
 
 import { ApiError } from "../../shared/api";
+import { useSelectedStore } from "../../shared/hooks/useSelectedStore";
 import { useCompanyScope, type CompanyScope } from "../../shared/ui/CompanyScopeProvider";
+import { StoreInsightsCard } from "../../shared/ui/StoreInsightsCard";
 import { getAnalizaMagazin, getStores } from "./api";
 import type {
   AMGapProduct,
@@ -53,7 +55,8 @@ export default function AnalizaMagazinPage() {
 
   const [monthsWindow, setMonthsWindow] = useState<number>(3);
   const [stores, setStores] = useState<AMStoreOption[]>([]);
-  const [selectedStore, setSelectedStore] = useState<string>("");
+  // Sincronizat cu /analiza/magazin-dashboard prin localStorage.
+  const { selectedStore, setSelectedStore } = useSelectedStore();
   const [data, setData] = useState<AMResponse | null>(null);
   const [loadingStores, setLoadingStores] = useState(true);
   const [loadingGap, setLoadingGap] = useState(false);
@@ -72,10 +75,13 @@ export default function AnalizaMagazinPage() {
       .then((r) => {
         if (cancelled) return;
         setStores(r.stores);
-        setSelectedStore((prev) => {
-          if (prev && r.stores.some((s) => s.key === prev)) return prev;
-          return r.stores[0]?.key ?? "";
-        });
+        // Păstrăm magazinul persistat în localStorage dacă încă există
+        // în listă; altfel cădem pe primul.
+        const next =
+          selectedStore && r.stores.some((s) => s.key === selectedStore)
+            ? selectedStore
+            : (r.stores[0]?.key ?? "");
+        if (next !== selectedStore) setSelectedStore(next);
       })
       .catch((err) => {
         if (!cancelled) {
@@ -88,6 +94,8 @@ export default function AnalizaMagazinPage() {
     return () => {
       cancelled = true;
     };
+    // selectedStore citit doar la load — nu re-rulăm la schimbarea lui (ar fi loop).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiScope, monthsWindow]);
 
   // Încărcăm gap-ul când se schimbă magazinul sau fereastra.
@@ -264,6 +272,14 @@ export default function AnalizaMagazinPage() {
           ))}
         </select>
       </div>
+
+      {selectedStore && (
+        <StoreInsightsCard
+          scope={apiScope}
+          store={selectedStore}
+          monthsWindow={monthsWindow}
+        />
+      )}
 
       {data && availableCategories.length > 0 && (
         <div style={styles.filterBar}>

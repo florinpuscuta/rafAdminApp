@@ -48,3 +48,40 @@ class AMResponse(APISchema):
     gap_count: int
     gap: list[AMGapProduct] = Field(default_factory=list)
     breakdown: list[AMCategoryBreakdown] = Field(default_factory=list)
+
+
+# ── Insights (rank + must-list) ──────────────────────────────────────────
+
+
+class AMRank(APISchema):
+    """Poziția magazinului în clasament + total."""
+    rank: int                # 1 = primul
+    total: int               # total magazine clasate
+    pct_top: float           # 100 * (1 - rank/total) — cu cât mai mare, mai bun
+
+
+class AMMustListProduct(APISchema):
+    """Produs cu vânzări mari în portofoliu, dar 0 vânzări la magazinul țintă."""
+    product_id: UUID
+    product_code: str
+    product_name: str
+    category: str | None
+    listed_in_stores: int        # câte magazine din scope îl vând
+    total_stores: int            # total magazine din scope cu vânzări în fereastră
+    monthly_avg_per_listed: Decimal  # vânzare medie / lună / magazin care îl listează
+    estimated_window_revenue: Decimal   # estimare pe `months_window` (valoare lei)
+    estimated_window_quantity: Decimal  # estimare pe `months_window` (cantitate)
+    estimated_12m_revenue: Decimal      # estimare anuală la magazinul țintă
+    rationale: str               # explicație scurtă în RO
+
+
+class AMInsightsResponse(APISchema):
+    scope: str
+    store: str                   # numele magazinului (RawSale.client)
+    chain: str
+    months_window: int
+    rank_by_value: AMRank
+    rank_by_skus: AMRank
+    store_total_value: Decimal   # vânzările totale ale magazinului în fereastră
+    store_sku_count: int         # SKU-uri unice vândute la magazin
+    must_list: list[AMMustListProduct] = Field(default_factory=list)

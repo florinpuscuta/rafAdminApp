@@ -9,6 +9,9 @@ from app.modules.analiza_magazin import service as svc
 from app.modules.analiza_magazin.schemas import (
     AMCategoryBreakdown,
     AMGapProduct,
+    AMInsightsResponse,
+    AMMustListProduct,
+    AMRank,
     AMResponse,
     AMStoreOption,
     AMStoresResponse,
@@ -118,5 +121,75 @@ async def get_analiza_magazin(
                 gap_count=b.gap_count,
             )
             for b in result.breakdown
+        ],
+    )
+
+
+@router.get("/insights", response_model=AMInsightsResponse)
+async def get_insights(
+    scope: str = Query("adp", description="'adp' | 'sika'"),
+    store: str = Query(..., min_length=1,
+                       description="Numele magazinului (RawSale.client)"),
+    months: int = Query(svc.MONTHS_WINDOW, description="3 | 6 | 9 | 12"),
+    tenant_id: UUID = Depends(get_current_tenant_id),
+    session: AsyncSession = Depends(get_session),
+):
+    """
+    Insights pentru un magazin:
+      - rank în clasamentul scope-ului (după valoare totală + nr SKU-uri)
+      - top 5 produse "obligatoriu de listat" cu estimare revenue 12 luni
+
+    Estimarea folosește vânzarea medie / lună / magazin care listează produsul,
+    proiectată pe 12 luni și ajustată cu un size_factor (vânzările magazinului
+    țintă vs media scope-ului), clip la [0.3×, 3×].
+    """
+    s = _validate_scope(scope)
+    m = _validate_months(months)
+    result = await svc.compute_insights(
+        session, tenant_id, scope=s, store=store, months_window=m,
+    )
+    if result is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            detail={
+                "code": "no_insights",
+                "message": (
+                    "Magazinul nu are date suficiente în ultimele "
+                    f"{m} luni (sau nu aparține unui chain cunoscut)."
+                ),
+            },
+        )
+    return AMInsightsResponse(
+        scope=result.scope,
+        store=result.store,
+        chain=result.chain,
+        months_window=result.months_window,
+        rank_by_value=AMRank(
+            rank=result.rank_by_value.rank,
+            total=result.rank_by_value.total,
+            pct_top=result.rank_by_value.pct_top,
+        ),
+        rank_by_skus=AMRank(
+            rank=result.rank_by_skus.rank,
+            total=result.rank_by_skus.total,
+            pct_top=result.rank_by_skus.pct_top,
+        ),
+        store_total_value=result.store_total_value,
+        store_sku_count=result.store_sku_count,
+        must_list=[
+            AMMustListProduct(
+                product_id=p.product_id,
+                product_code=p.product_code,
+                product_name=p.product_name,
+                category=p.category,
+                listed_in_stores=p.listed_in_stores,
+                total_stores=p.total_stores,
+                monthly_avg_per_listed=p.monthly_avg_per_listed,
+                estimated_window_revenue=p.estimated_window_revenue,
+                estimated_window_quantity=p.estimated_window_quantity,
+                estimated_12m_revenue=p.estimated_12m_revenue,
+                rationale=p.rationale,
+            )
+            for p in result.must_list
         ],
     )

@@ -6,7 +6,9 @@ import {
 } from "react";
 
 import { ApiError } from "../../shared/api";
+import { useSelectedStore } from "../../shared/hooks/useSelectedStore";
 import { useCompanyScope, type CompanyScope } from "../../shared/ui/CompanyScopeProvider";
+import { StoreInsightsCard } from "../../shared/ui/StoreInsightsCard";
 import { getClients, getDashboard, getStoresForClient } from "./api";
 import type {
   AMDDashboardResponse,
@@ -26,6 +28,16 @@ const MONTH_NAMES: string[] = [
 function scopeFromCompany(c: CompanyScope): AMDScope {
   if (c === "sika") return "sika";
   return "adp";
+}
+
+/** Detectează chain-ul (client KA) dintr-un nume brut de magazin. */
+function clientFromStoreName(name: string): string {
+  const upper = name.toUpperCase();
+  if (upper.includes("DEDEMAN")) return "Dedeman";
+  if (upper.includes("ALTEX")) return "Altex";
+  if (upper.includes("LEROY") || upper.includes("MERLIN")) return "Leroy Merlin";
+  if (upper.includes("HORNBACH")) return "Hornbach";
+  return "";
 }
 
 function scopeLabel(s: AMDScope): string {
@@ -76,6 +88,10 @@ export default function AnalizaMagazinDashboardPage() {
   const [stores, setStores] = useState<AMDStoreOption[]>([]);
   const [selectedStoreId, setSelectedStoreId] = useState<string>("");
 
+  // Sincronizat cu /analiza/magazin prin localStorage (numele magazinului).
+  const { selectedStore: persistedStoreName, setSelectedStore: setPersistedStoreName } =
+    useSelectedStore();
+
   const [data, setData] = useState<AMDDashboardResponse | null>(null);
 
   const [loadingClients, setLoadingClients] = useState(true);
@@ -92,7 +108,16 @@ export default function AnalizaMagazinDashboardPage() {
       .then((r) => {
         if (cancelled) return;
         setClients(r.clients);
-        setSelectedClient((prev) => prev || r.clients[0] || "");
+        // Dacă vine un magazin pre-selectat din /analiza/magazin (localStorage),
+        // încercăm să detectăm clientul (chain) corespunzător.
+        setSelectedClient((prev) => {
+          if (prev) return prev;
+          if (persistedStoreName) {
+            const detected = clientFromStoreName(persistedStoreName);
+            if (detected && r.clients.includes(detected)) return detected;
+          }
+          return r.clients[0] || "";
+        });
       })
       .catch((err) => {
         if (!cancelled) {
@@ -124,6 +149,12 @@ export default function AnalizaMagazinDashboardPage() {
         setStores(r.stores);
         setSelectedStoreId((prev) => {
           if (prev && r.stores.some((s) => s.storeId === prev)) return prev;
+          // Sincronizare cu /analiza/magazin: dacă persistedStoreName se
+          // potrivește cu un magazin din listă, îl pre-selectăm.
+          if (persistedStoreName) {
+            const match = r.stores.find((s) => s.name === persistedStoreName);
+            if (match) return match.storeId;
+          }
           return r.stores[0]?.storeId ?? "";
         });
       })
@@ -233,7 +264,13 @@ export default function AnalizaMagazinDashboardPage() {
           <span style={styles.controlLabel}>Magazin</span>
           <select
             value={selectedStoreId}
-            onChange={(e) => setSelectedStoreId(e.target.value)}
+            onChange={(e) => {
+              const newId = e.target.value;
+              setSelectedStoreId(newId);
+              // Sincronizăm numele în localStorage (citit de /analiza/magazin).
+              const found = stores.find((s) => s.storeId === newId);
+              setPersistedStoreName(found?.name ?? "");
+            }}
             disabled={loadingStores || stores.length === 0}
             style={styles.selectWide}
           >
@@ -250,6 +287,14 @@ export default function AnalizaMagazinDashboardPage() {
       {error && <div style={styles.error}>{error}</div>}
       {(loadingDashboard || loadingStores) && (
         <div style={styles.loading}>Se încarcă datele…</div>
+      )}
+
+      {selectedStoreId && stores.length > 0 && (
+        <StoreInsightsCard
+          scope={apiScope}
+          store={stores.find((s) => s.storeId === selectedStoreId)?.name ?? ""}
+          monthsWindow={monthsWindow}
+        />
       )}
 
       {data && !loadingDashboard && (
