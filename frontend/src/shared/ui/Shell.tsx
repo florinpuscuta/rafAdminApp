@@ -426,12 +426,27 @@ export function Shell({ children }: { children: ReactNode }) {
   const location = useLocation();
   const isAdmin = user?.role === "admin";
 
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState<boolean>(() => {
+    // Default închis; persistă alegerea user-ului între sesiuni.
+    try {
+      return localStorage.getItem("sidebar-open") === "true";
+    } catch {
+      return false;
+    }
+  });
   const [isMobile, setIsMobile] = useState(() =>
     window.matchMedia("(max-width: 768px)").matches,
   );
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const [facturiBonusPending, setFacturiBonusPending] = useState(0);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("sidebar-open", String(sidebarOpen));
+    } catch {
+      /* localStorage indisponibil — ignorăm */
+    }
+  }, [sidebarOpen]);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 768px)");
@@ -459,10 +474,12 @@ export function Shell({ children }: { children: ReactNode }) {
     };
   }, [location.pathname]);
 
+  // Resetăm doar tree-ul expandat când user-ul schimbă scope-ul sau intră în
+  // Settings (alte meniuri). Sidebar-ul rămâne în starea aleasă de user
+  // indiferent de navigare.
   useEffect(() => {
-    setMobileOpen(false);
     setExpanded({});
-  }, [location.pathname, scope, inSettings]);
+  }, [scope, inSettings]);
 
   const navTree = useMemo<NavItem[]>(() => {
     if (inSettings) return buildSettingsTree(Boolean(isAdmin), facturiBonusPending);
@@ -482,7 +499,7 @@ export function Shell({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const sidebarVisible = !isMobile || mobileOpen;
+  const sidebarVisible = sidebarOpen;
 
   return (
     <div
@@ -496,30 +513,33 @@ export function Shell({ children }: { children: ReactNode }) {
       <a href="#main-content" className="skip-link" style={styles.skipLink}>
         Sari la conținutul principal
       </a>
-      {isMobile && (
-        <div style={styles.mobileBar}>
-          <button
-            onClick={() => setMobileOpen(!mobileOpen)}
-            style={styles.burger}
-            aria-label={mobileOpen ? "Închide meniul" : "Deschide meniul"}
-            aria-expanded={mobileOpen}
-          >
-            ☰
-          </button>
-          <strong style={{ fontSize: 14, color: "var(--cyan)" }}>
-            {scopeTitle}
-          </strong>
-        </div>
-      )}
+      <div style={styles.mobileBar}>
+        <button
+          onClick={() => setSidebarOpen(!sidebarOpen)}
+          style={styles.burger}
+          aria-label={sidebarOpen ? "Închide meniul" : "Deschide meniul"}
+          aria-expanded={sidebarOpen}
+        >
+          ☰
+        </button>
+        <strong style={{ fontSize: 14, color: "var(--cyan)" }}>
+          {scopeTitle}
+        </strong>
+      </div>
       <div
         style={{
           ...styles.layout,
-          gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "var(--sidebar-w) minmax(0, 1fr)",
+          // Sidebar-ul ocupă o coloană doar când e deschis ȘI nu suntem pe
+          // mobile (pe mobile e overlay absolut, nu push). Altfel, main-ul ia
+          // toată lățimea.
+          gridTemplateColumns: sidebarOpen && !isMobile
+            ? "var(--sidebar-w) minmax(0, 1fr)"
+            : "minmax(0, 1fr)",
         }}
       >
-        {isMobile && mobileOpen && (
+        {sidebarOpen && isMobile && (
           <div
-            onClick={() => setMobileOpen(false)}
+            onClick={() => setSidebarOpen(false)}
             aria-hidden="true"
             style={{
               position: "fixed",
