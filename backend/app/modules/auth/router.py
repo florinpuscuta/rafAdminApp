@@ -128,6 +128,27 @@ async def me(user: User = Depends(get_current_user)):
     return UserOut.model_validate(user)
 
 
+class CapabilitiesResponse(APISchema):
+    role_v2: str
+    modules: list[str]  # `["*"]` pentru admin (wildcard)
+
+
+@router.get("/me/capabilities", response_model=CapabilitiesResponse)
+async def my_capabilities(user: User = Depends(get_current_user)):
+    """
+    Capabilități pentru user-ul curent — folosit de frontend pentru a ascunde
+    meniurile inaccesibile. Wildcard `["*"]` = toate modulele (admin).
+    """
+    from app.core.rbac import capabilities_for, effective_role
+
+    role = effective_role(user)
+    caps = capabilities_for(role)
+    return CapabilitiesResponse(
+        role_v2=role.value,
+        modules=sorted(caps),
+    )
+
+
 from app.modules.tenants.models import Organization  # noqa: E402
 from app.modules.users import service as users_service  # noqa: E402
 

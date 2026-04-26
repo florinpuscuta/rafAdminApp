@@ -414,9 +414,55 @@ function buildSettingsTree(isAdmin: boolean, facturiBonusPending: number = 0): N
 }
 
 // ─────────────────────────────────────────────────────────────────────
+// Capabilities filter pentru nav tree.
+//
+// Mapează un path "/parcurs" → numele modulului "parcurs" și verifică
+// `canAccess`. Părintele se păstrează doar dacă are cel puțin un copil
+// vizibil. Divider-ele rămân la locul lor (UI-ul se ocupă să nu lase
+// două consecutiv).
+
+function moduleNameFromPath(path: string): string {
+  // "/parcurs" → "parcurs", "/api/foo" → "api". Robust la query/hash.
+  return path.replace(/^\//, "").split(/[?#/]/)[0] || "dashboard";
+}
+
+function filterNavByCapabilities(
+  items: NavItem[],
+  canAccess: (mod: string) => boolean,
+): NavItem[] {
+  const out: NavItem[] = [];
+  for (const item of items) {
+    if (item.kind === "divider") {
+      out.push(item);
+      continue;
+    }
+    if (item.kind === "leaf") {
+      if (canAccess(moduleNameFromPath(item.to))) {
+        out.push(item);
+      }
+      continue;
+    }
+    // Parent: filtrăm copiii; păstrăm părintele doar dacă rămâne cel puțin
+    // un copil leaf accesibil.
+    const visibleChildren = item.children.filter((c) =>
+      canAccess(moduleNameFromPath(c.to)),
+    );
+    if (visibleChildren.length > 0) {
+      out.push({ ...item, children: visibleChildren });
+    }
+  }
+  // Curățăm divider-uri duplicate sau de la start/sfârșit (UI cosmetic).
+  return out.filter((item, idx, arr) => {
+    if (item.kind !== "divider") return true;
+    if (idx === 0 || idx === arr.length - 1) return false;
+    return arr[idx - 1].kind !== "divider";
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────
 
 export function Shell({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, logout, canAccess } = useAuth();
   const { theme, toggle } = useTheme();
   const { scope, setScope, inSettings, enterSettings } = useCompanyScope();
   const scopeTitle =
@@ -482,10 +528,13 @@ export function Shell({ children }: { children: ReactNode }) {
   }, [scope, inSettings]);
 
   const navTree = useMemo<NavItem[]>(() => {
-    if (inSettings) return buildSettingsTree(Boolean(isAdmin), facturiBonusPending);
-    if (scope === "sikadp") return buildSikadpTree();
-    return buildCompanyTree(scope);
-  }, [scope, inSettings, isAdmin, facturiBonusPending]);
+    const fullTree = inSettings
+      ? buildSettingsTree(Boolean(isAdmin), facturiBonusPending)
+      : scope === "sikadp"
+        ? buildSikadpTree()
+        : buildCompanyTree(scope);
+    return filterNavByCapabilities(fullTree, canAccess);
+  }, [scope, inSettings, isAdmin, facturiBonusPending, canAccess]);
 
   const isExpanded = useCallback(
     (id: string) => expanded[id] === true,

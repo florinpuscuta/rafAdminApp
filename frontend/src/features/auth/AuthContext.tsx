@@ -17,22 +17,43 @@ import {
 } from "../../shared/api";
 import { setSentryUser } from "../../sentry";
 import * as authApi from "./api";
-import type { AuthResponse, LoginPayload, SignupPayload, User } from "./types";
+import type {
+  AuthResponse,
+  Capabilities,
+  LoginPayload,
+  SignupPayload,
+  User,
+} from "./types";
 
 interface AuthState {
   user: User | null;
+  capabilities: Capabilities | null;
   loading: boolean;
   login: (payload: LoginPayload) => Promise<void>;
   signup: (payload: SignupPayload) => Promise<void>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
+  /** True dacă rolul curent are acces la modulul cerut (sau e admin wildcard). */
+  canAccess: (moduleName: string) => boolean;
 }
 
 const AuthContext = createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+
+  // Helper: aducerea capabilităților nu blochează aplicația dacă pică
+  // (frontend-ul cade pe `user.role === "admin"` ca fallback).
+  const fetchCapabilities = useCallback(async () => {
+    try {
+      const caps = await authApi.capabilities();
+      setCapabilities(caps);
+    } catch {
+      setCapabilities(null);
+    }
+  }, []);
 
   useEffect(() => {
     const token = getToken();
@@ -42,24 +63,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     authApi
       .me()
-      .then((u) => {
+      .then(async (u) => {
         setUser(u);
         setSentryUser({ id: u.id, email: u.email, tenantId: u.tenantId });
+        await fetchCapabilities();
       })
       .catch(() => clearAuth())
       .finally(() => setLoading(false));
-  }, []);
+  }, [fetchCapabilities]);
 
-  const applyAuth = useCallback((resp: AuthResponse) => {
-    setToken(resp.accessToken);
-    setRefreshToken(resp.refreshToken);
-    setUser(resp.user);
-    setSentryUser({
-      id: resp.user.id,
-      email: resp.user.email,
-      tenantId: resp.user.tenantId,
-    });
-  }, []);
+  const applyAuth = useCallback(
+    (resp: AuthResponse) => {
+      setToken(resp.accessToken);
+      setRefreshToken(resp.refreshToken);
+      setUser(resp.user);
+      setSentryUser({
+        id: resp.user.id,
+        email: resp.user.email,
+        tenantId: resp.user.tenantId,
+      });
+      // După login/signup, aducem capabilităţile imediat (non-blocking).
+      void fetchCapabilities();
+    },
+    [fetchCapabilities],
+  );
 
   const login = useCallback(
     async (payload: LoginPayload) => {
@@ -88,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     clearAuth();
     setUser(null);
+    setCapabilities(null);
     setSentryUser(null);
   }, []);
 
@@ -96,15 +124,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     try {
       const u = await authApi.me();
       setUser(u);
+      await fetchCapabilities();
     } catch {
       clearAuth();
       setUser(null);
+      setCapabilities(null);
     }
-  }, []);
+  }, [fetchCapabilities]);
+
+  const canAccess = useCallback(
+    (moduleName: string): boolean => {
+      // Fallback safety: dacă n-am încă capabilities (race la load), permite
+      // adminul legacy să vadă tot. Restul rolurilor primesc default deny.
+      if (!capabilities) {
+        return user?.role === "admin";
+      }
+      const mods = capabilities.modules;
+      return mods.includes("*") || mods.includes(moduleName);
+    },
+    [capabilities, user],
+  );
 
   const value = useMemo<AuthState>(
-    () => ({ user, loading, login, signup, logout, refreshUser }),
-    [user, loading, login, signup, logout, refreshUser],
+    () => ({
+      user, capabilities, loading,
+      login, signup, logout, refreshUser, canAccess,
+    }),
+    [user, capabilities, loading, login, signup, logout, refreshUser, canAccess],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

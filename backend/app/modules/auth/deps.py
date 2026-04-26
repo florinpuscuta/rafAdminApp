@@ -139,8 +139,16 @@ async def get_current_tenant_id(
 
 
 async def get_current_admin(user: User = Depends(get_current_user)) -> User:
-    """Dependency pentru endpoint-uri restrânse la admini (create users, etc)."""
-    if user.role != "admin":
+    """Dependency pentru endpoint-uri restrânse la admini (create users, etc).
+
+    Acceptă DOAR rolul de admin — verifică atât `role` legacy cât și `role_v2`
+    (canonic). User-i fără `role_v2` setat folosesc fallback pe `role`.
+    """
+    # Lazy import ca să evităm cicluri.
+    from app.core.rbac import effective_role
+    from app.modules.users.models import UserRole
+
+    if effective_role(user) != UserRole.ADMIN:
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             detail={"code": "not_admin", "message": "Operațiune permisă doar adminilor"},

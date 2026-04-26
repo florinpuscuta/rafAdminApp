@@ -1,5 +1,11 @@
 import { apiFetch } from "../../shared/api";
-import type { AuthResponse, LoginPayload, SignupPayload, User } from "./types";
+import type {
+  AuthResponse,
+  Capabilities,
+  LoginPayload,
+  SignupPayload,
+  User,
+} from "./types";
 
 export function signup(payload: SignupPayload): Promise<AuthResponse> {
   return apiFetch<AuthResponse>("/api/auth/signup", {
@@ -17,6 +23,10 @@ export function login(payload: LoginPayload): Promise<AuthResponse> {
 
 export function me(): Promise<User> {
   return apiFetch<User>("/api/auth/me");
+}
+
+export function capabilities(): Promise<Capabilities> {
+  return apiFetch<Capabilities>("/api/auth/me/capabilities");
 }
 
 export interface ChangePasswordPayload {

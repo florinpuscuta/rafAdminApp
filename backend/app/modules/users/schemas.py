@@ -14,6 +14,7 @@ class UserOut(APISchema):
     tenant_id: UUID
     email: str
     role: str
+    role_v2: str | None = None  # canonic enum (admin/director/finance_manager/regional_manager/sales_agent/viewer)
     active: bool
     created_at: datetime
     last_login_at: datetime | None = None
