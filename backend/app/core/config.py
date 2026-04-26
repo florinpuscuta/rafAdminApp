@@ -68,5 +68,11 @@ class Settings(BaseSettings):
     cache_ttl_aggregates: int = 3600  # 1h default
     cache_enabled: bool = True
 
+    # Monitoring / metrici. Prag (ms) peste care un query e considerat lent
+    # și e logat. La threshold mai mare îl trimitem și la Sentry ca să nu
+    # spammuim.
+    slow_query_threshold_ms: int = 500
+    sentry_slow_query_threshold_ms: int = 2000
+
 
 settings = Settings()

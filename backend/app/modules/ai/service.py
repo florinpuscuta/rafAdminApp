@@ -265,8 +265,14 @@ async def _call_anthropic(
     user_content: str,
     *,
     api_key: str,
+    log_tenant_id: UUID | None = None,
+    log_user_id: UUID | None = None,
 ) -> str:
+    import time as _time
+
     import anthropic
+
+    from app.modules.ai.usage import log_ai_usage
 
     client = anthropic.Anthropic(api_key=api_key)
     messages: list[dict] = [
@@ -277,6 +283,23 @@ async def _call_anthropic(
     messages.append({"role": "user", "content": user_content})
 
     system = await _system_prompt_for(session, tenant_ids)
+    total_in = 0
+    total_out = 0
+    started = _time.perf_counter()
+
+    async def _flush_usage(final_text: str) -> None:
+        if log_tenant_id is None:
+            return
+        latency = int((_time.perf_counter() - started) * 1000)
+        await log_ai_usage(
+            tenant_id=log_tenant_id,
+            user_id=log_user_id,
+            provider="anthropic",
+            model=settings.anthropic_model,
+            input_tokens=total_in,
+            output_tokens=total_out,
+            latency_ms=latency,
+        )
 
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = client.messages.create(
@@ -286,10 +309,18 @@ async def _call_anthropic(
             tools=ANTHROPIC_TOOLS,
             messages=messages,
         )
+        # Acumulăm tokens din usage (pe fiecare iterație de tool loop).
+        try:
+            total_in += getattr(resp.usage, "input_tokens", 0) or 0
+            total_out += getattr(resp.usage, "output_tokens", 0) or 0
+        except Exception:
+            pass
 
         if resp.stop_reason != "tool_use":
             parts = [b.text for b in resp.content if getattr(b, "type", None) == "text"]
-            return "".join(parts) or "(răspuns gol)"
+            answer = "".join(parts) or "(răspuns gol)"
+            await _flush_usage(answer)
+            return answer
 
         # Append răspunsul modelului (cu tool_use blocks) în istoric.
         messages.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
@@ -313,10 +344,12 @@ async def _call_anthropic(
 
         messages.append({"role": "user", "content": tool_results})
 
-    return (
+    fallback = (
         "(am atins limita de iterații pe tool use; reformulează întrebarea "
         "sau cere un singur query țintă)"
     )
+    await _flush_usage(fallback)
+    return fallback
 
 
 # --------------------------------------------------------------------------
@@ -331,8 +364,15 @@ async def _call_openai_compat(
     api_key: str,
     model: str,
     base_url: str | None,
+    provider_name: str = "openai",
+    log_tenant_id: UUID | None = None,
+    log_user_id: UUID | None = None,
 ) -> str:
+    import time as _time
+
     from openai import OpenAI
+
+    from app.modules.ai.usage import log_ai_usage
 
     client = OpenAI(api_key=api_key, base_url=base_url) if base_url else OpenAI(api_key=api_key)
 
@@ -343,6 +383,24 @@ async def _call_openai_compat(
             messages.append({"role": m.role, "content": m.content})
     messages.append({"role": "user", "content": user_content})
 
+    total_in = 0
+    total_out = 0
+    started = _time.perf_counter()
+
+    async def _flush_usage() -> None:
+        if log_tenant_id is None:
+            return
+        latency = int((_time.perf_counter() - started) * 1000)
+        await log_ai_usage(
+            tenant_id=log_tenant_id,
+            user_id=log_user_id,
+            provider=provider_name,
+            model=model,
+            input_tokens=total_in,
+            output_tokens=total_out,
+            latency_ms=latency,
+        )
+
     for _ in range(MAX_TOOL_ITERATIONS):
         resp = client.chat.completions.create(
             model=model,
@@ -350,10 +408,19 @@ async def _call_openai_compat(
             tools=OPENAI_TOOLS,
             max_tokens=MAX_TOKENS,
         )
+        try:
+            usage = resp.usage
+            if usage is not None:
+                total_in += getattr(usage, "prompt_tokens", 0) or 0
+                total_out += getattr(usage, "completion_tokens", 0) or 0
+        except Exception:
+            pass
         msg = resp.choices[0].message
 
         if not msg.tool_calls:
-            return msg.content or "(răspuns gol)"
+            answer = msg.content or "(răspuns gol)"
+            await _flush_usage()
+            return answer
 
         messages.append({
             "role": "assistant",
@@ -387,10 +454,12 @@ async def _call_openai_compat(
                 "content": json.dumps(result, ensure_ascii=False, default=str)[:8000],
             })
 
-    return (
+    fallback = (
         "(am atins limita de iterații pe tool use; reformulează întrebarea "
         "sau cere un singur query țintă)"
     )
+    await _flush_usage()
+    return fallback
 
 
 async def _call_llm(
@@ -401,10 +470,13 @@ async def _call_llm(
     user_content: str,
     *,
     api_key: str,
+    log_tenant_id: UUID | None = None,
+    log_user_id: UUID | None = None,
 ) -> str:
     if provider == "anthropic":
         return await _call_anthropic(
-            session, tenant_ids, history, user_content, api_key=api_key
+            session, tenant_ids, history, user_content, api_key=api_key,
+            log_tenant_id=log_tenant_id, log_user_id=log_user_id,
         )
     cfg = PROVIDERS[provider]
     return await _call_openai_compat(
@@ -415,6 +487,9 @@ async def _call_llm(
         api_key=api_key,
         model=getattr(settings, cfg["model_attr"]),
         base_url=cfg.get("base_url"),
+        provider_name=provider,
+        log_tenant_id=log_tenant_id,
+        log_user_id=log_user_id,
     )
 
 
@@ -455,6 +530,8 @@ async def send_message(
             assistant_text = await _call_llm(
                 session, effective_tenant_ids, provider, history, user_content,
                 api_key=api_key,
+                log_tenant_id=conv.tenant_id,
+                log_user_id=conv.user_id,
             )
     except Exception as exc:  # noqa: BLE001
         log.exception("AI provider error")

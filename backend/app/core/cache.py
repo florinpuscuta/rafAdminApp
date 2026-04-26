@@ -146,12 +146,19 @@ def cached(
             try:
                 raw = await client.get(full_key)
                 if raw is not None:
+                    # Cache hit — incrementăm metrica și returnăm.
+                    from app.core.metrics import cache_hit
+
+                    await cache_hit(prefix)
                     return _loads(raw)  # type: ignore[return-value]
             except Exception as exc:
                 logger.warning("cache GET a eșuat (%s) — fallback la DB.", exc)
                 # Continuăm la calcul direct.
 
             # MISS — calculăm și salvăm
+            from app.core.metrics import cache_miss
+
+            await cache_miss(prefix)
             result = await fn(*args, **kwargs)
             try:
                 await client.setex(full_key, effective_ttl, _dumps(result))
@@ -204,10 +211,16 @@ def cached_pydantic(
             try:
                 raw = await client.get(full_key)
                 if raw is not None:
+                    from app.core.metrics import cache_hit
+
+                    await cache_hit(prefix)
                     return model.model_validate_json(raw)
             except Exception as exc:
                 logger.warning("cache_pydantic GET a eșuat (%s).", exc)
 
+            from app.core.metrics import cache_miss
+
+            await cache_miss(prefix)
             result = await fn(*args, **kwargs)
             try:
                 payload = result.model_dump_json()

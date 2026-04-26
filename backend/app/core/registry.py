@@ -6,6 +6,7 @@ unui modul = adăugarea/eliminarea unei linii aici.
 from fastapi import APIRouter
 
 from app.modules.activitate.router import router as activitate_router
+from app.modules.admin_metrics.router import router as admin_metrics_router
 from app.modules.agents.router import router as agents_router
 from app.modules.ai.router import router as ai_router
 from app.modules.analiza_magazin.router import router as analiza_magazin_router
@@ -114,4 +115,5 @@ MODULE_ROUTERS: list[APIRouter] = [
     taskuri_router,
     app_settings_router,
     evaluare_agenti_router,
+    admin_metrics_router,
 ]
