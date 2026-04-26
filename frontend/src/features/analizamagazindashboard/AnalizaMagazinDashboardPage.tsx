@@ -217,7 +217,10 @@ export default function AnalizaMagazinDashboardPage() {
         </h1>
         {data && (
           <span style={styles.subtitle}>
-            {data.storeName} · {windowLabel} · {data.monthsWindow} luni
+            <strong style={styles.storeNameBig}>{data.storeName}</strong>
+            <span style={styles.subtitleMeta}>
+              · {windowLabel} · {data.monthsWindow} luni
+            </span>
           </span>
         )}
       </div>
@@ -714,8 +717,21 @@ const styles: Record<string, CSSProperties> = {
     color: "#0f172a",
   },
   subtitle: {
-    color: "#475569",
-    fontSize: 14,
+    display: "inline-flex",
+    alignItems: "baseline",
+    gap: 8,
+    flexWrap: "wrap",
+  },
+  storeNameBig: {
+    fontSize: 20,
+    fontWeight: 700,
+    color: "#0f172a",
+    letterSpacing: 0.2,
+  },
+  subtitleMeta: {
+    color: "#64748b",
+    fontSize: 13,
+    fontWeight: 500,
   },
   controls: {
     display: "flex",

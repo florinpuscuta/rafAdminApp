@@ -222,47 +222,120 @@ export function StoreInsightsCard({ scope, store, monthsWindow }: Props) {
               Magazinul are deja toate mortarele uscate relevante listate.
             </div>
           ) : (
-            <table style={tableSt}>
-              <thead>
-                <tr>
-                  <th style={th}>Produs</th>
-                  <th style={th}>Categorie</th>
-                  <th style={{ ...th, textAlign: "right" }}>Coverage</th>
-                  <th style={{ ...th, textAlign: "right" }}>
-                    Estimare {data.monthsWindow} luni
-                  </th>
-                  <th style={{ ...th, textAlign: "right" }}>
-                    Cantitate {data.monthsWindow} luni
-                  </th>
-                  <th style={{ ...th, textAlign: "right" }}>Anualizat 12 luni</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.mustList.map((p) => (
-                  <tr key={p.productId}>
-                    <td style={td}>
-                      <div style={{ fontWeight: 600 }}>{p.productName}</div>
-                      <div style={{ fontSize: 10, color: "var(--muted)" }}>
-                        {p.productCode} · {p.rationale}
-                      </div>
-                    </td>
-                    <td style={td}>{p.category ?? "—"}</td>
-                    <td style={tdRight}>
-                      {p.listedInStores}/{p.totalStores}
-                    </td>
-                    <td style={{ ...tdRight, fontWeight: 700, color: "var(--cyan)" }}>
-                      {fmtRo(toNum(p.estimatedWindowRevenue))} lei
-                    </td>
-                    <td style={tdRight}>
-                      {fmtRo(toNum(p.estimatedWindowQuantity), 1)} buc
-                    </td>
-                    <td style={tdRight}>
-                      {fmtRo(toNum(p.estimated12mRevenue))} lei
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            (() => {
+              // Total estimat din toate produsele candidate.
+              const totalRev = data.mustList.reduce(
+                (s, p) => s + toNum(p.estimatedWindowRevenue),
+                0,
+              );
+              const totalQty = data.mustList.reduce(
+                (s, p) => s + toNum(p.estimatedWindowQuantity),
+                0,
+              );
+              const total12m = data.mustList.reduce(
+                (s, p) => s + toNum(p.estimated12mRevenue),
+                0,
+              );
+              const storeTotal = toNum(data.storeTotalValue);
+              const upliftPct =
+                storeTotal > 0 ? (totalRev / storeTotal) * 100 : 0;
+              return (
+                <>
+                  <table style={tableSt}>
+                    <thead>
+                      <tr>
+                        <th style={th}>Produs</th>
+                        <th style={th}>Categorie</th>
+                        <th style={{ ...th, textAlign: "right" }}>Coverage</th>
+                        <th style={{ ...th, textAlign: "right" }}>
+                          Estimare {data.monthsWindow} luni
+                        </th>
+                        <th style={{ ...th, textAlign: "right" }}>
+                          Cantitate {data.monthsWindow} luni
+                        </th>
+                        <th style={{ ...th, textAlign: "right" }}>
+                          Anualizat 12 luni
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.mustList.map((p) => (
+                        <tr key={p.productId}>
+                          <td style={td}>
+                            <div style={{ fontWeight: 600 }}>{p.productName}</div>
+                            <div style={{ fontSize: 10, color: "var(--muted)" }}>
+                              {p.productCode} · {p.rationale}
+                            </div>
+                          </td>
+                          <td style={td}>{p.category ?? "—"}</td>
+                          <td style={tdRight}>
+                            {p.listedInStores}/{p.totalStores}
+                          </td>
+                          <td
+                            style={{
+                              ...tdRight,
+                              fontWeight: 700,
+                              color: "var(--cyan)",
+                            }}
+                          >
+                            {fmtRo(toNum(p.estimatedWindowRevenue))} lei
+                          </td>
+                          <td style={tdRight}>
+                            {fmtRo(toNum(p.estimatedWindowQuantity), 1)} buc
+                          </td>
+                          <td style={tdRight}>
+                            {fmtRo(toNum(p.estimated12mRevenue))} lei
+                          </td>
+                        </tr>
+                      ))}
+                      {/* Total row */}
+                      <tr style={{ background: "var(--bg)" }}>
+                        <td style={{ ...td, fontWeight: 700 }} colSpan={2}>
+                          Total ({data.mustList.length} produse)
+                        </td>
+                        <td style={tdRight}>—</td>
+                        <td
+                          style={{
+                            ...tdRight,
+                            fontWeight: 800,
+                            color: "var(--cyan)",
+                          }}
+                        >
+                          {fmtRo(totalRev)} lei
+                        </td>
+                        <td style={{ ...tdRight, fontWeight: 700 }}>
+                          {fmtRo(totalQty, 1)} buc
+                        </td>
+                        <td style={{ ...tdRight, fontWeight: 700 }}>
+                          {fmtRo(total12m)} lei
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div
+                    style={{
+                      marginTop: 10,
+                      padding: 10,
+                      background: "var(--bg)",
+                      borderLeft: "3px solid var(--cyan)",
+                      borderRadius: 4,
+                      fontSize: 12,
+                    }}
+                  >
+                    <strong>Uplift potențial:</strong>{" "}
+                    listarea celor {data.mustList.length} produse ar putea
+                    aduce <strong style={{ color: "var(--cyan)" }}>
+                      +{fmtRo(totalRev)} lei
+                    </strong>{" "}
+                    pe {data.monthsWindow} luni, adică{" "}
+                    <strong style={{ color: "var(--cyan)" }}>
+                      +{upliftPct.toFixed(1)}%
+                    </strong>{" "}
+                    peste vânzările curente ale magazinului ({fmtRo(storeTotal)} lei).
+                  </div>
+                </>
+              );
+            })()
           )}
         </>
       )}
