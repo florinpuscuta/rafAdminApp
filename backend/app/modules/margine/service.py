@@ -24,6 +24,20 @@ from uuid import UUID
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cached
+
+
+def _pairs_key(
+    session: AsyncSession,
+    *,
+    tenant_id: UUID,
+    scope: str,
+    pairs: list[tuple[int, int]],
+) -> str:
+    """Cheie canonică pentru cache: tenant + scope + pairs ordonate."""
+    pair_str = ",".join(f"{y}-{m}" for y, m in sorted(set(pairs)))
+    return f"{tenant_id}:{scope}:{pair_str}"
+
 from app.core.period_math import period_pairs as _core_period_pairs
 from app.modules.pret_productie.models import ProductionPrice
 from app.modules.product_categories.models import ProductCategory
@@ -138,6 +152,7 @@ def period_pairs(
 _period_pairs = period_pairs
 
 
+@cached(prefix="margine:aggregate_sales", key_fn=_pairs_key)
 async def _aggregate_sales(
     session: AsyncSession,
     *,
@@ -234,6 +249,7 @@ async def _aggregate_sales(
     return list(agg.values())
 
 
+@cached(prefix="margine:total_period_revenue", key_fn=_pairs_key)
 async def _total_period_revenue(
     session: AsyncSession,
     *,
@@ -303,6 +319,7 @@ async def _total_period_revenue(
     return total
 
 
+@cached(prefix="margine:unmapped_per_client", key_fn=_pairs_key)
 async def _unmapped_per_client(
     session: AsyncSession,
     *,

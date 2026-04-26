@@ -20,12 +20,26 @@ from uuid import UUID
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import cached, months_csv
 from app.modules.mappings.resolution import (
     client_sam_map,
     resolve as resolve_canonical,
     store_agent_map,
 )
 from app.modules.sales.models import ImportBatch, RawSale
+
+
+def _agg_key(
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    company: str,
+    y1: int,
+    y2: int,
+    months: list[int],
+) -> str:
+    """Cheie canonică pentru cache-ul agregatelor consolidat (per tenant + perioadă)."""
+    return f"{tenant_id}:{company.lower()}:{y1}:{y2}:{months_csv(months)}"
 
 
 _MONTH_LABELS_SHORT = [
@@ -176,6 +190,7 @@ async def _fetch_rows(
 
 # ── Aggregare cu rezolvare SAM ─────────────────────────────────────────────
 
+@cached(prefix="consolidat:resolved", key_fn=_agg_key)
 async def _resolved_rows(
     session: AsyncSession,
     tenant_id: UUID,
@@ -187,6 +202,9 @@ async def _resolved_rows(
 ) -> list[dict[str, Any]]:
     """Fetch + rezolvă (agent, store) canonic per rând. Returnează
     [{agent_id, store_id, sales_y1, sales_y2}] agregat pe (agent_id, store_id).
+
+    Cache-uit (TTL din `cache_ttl_aggregates`) pentru că e funcția grea: query
+    pe `raw_sales` + rezolvare SAM. Invalidat la import via `cache.invalidate_tenant`.
     """
     raw = await _fetch_rows(
         session, tenant_id, company=company, y1=y1, y2=y2, months=months,
@@ -268,6 +286,9 @@ async def by_agent(
         {
             "agent_id": v["agent_id"],
             "stores_count": len(v["stores"]),
+            # Set-ul brut de store_id-uri (per-tenant). Routerul are nevoie
+            # de el pentru deduplicare cross-org la SIKADP.
+            "store_ids": v["stores"],
             "sales_y1": v["sales_y1"],
             "sales_y2": v["sales_y2"],
         }

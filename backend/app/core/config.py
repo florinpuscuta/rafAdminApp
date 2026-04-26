@@ -61,5 +61,12 @@ class Settings(BaseSettings):
     deepseek_api_key: str | None = None
     deepseek_model: str = "deepseek-chat"
 
+    # Redis cache pentru agregate grele (consolidat, marja_lunara).
+    # Dacă redis_url e gol sau Redis e jos, cache-ul e dezactivat (fail-soft) —
+    # query-urile merg direct la DB ca înainte.
+    redis_url: str = "redis://redis:6379/0"
+    cache_ttl_aggregates: int = 3600  # 1h default
+    cache_enabled: bool = True
+
 
 settings = Settings()

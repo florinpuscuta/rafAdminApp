@@ -43,6 +43,21 @@ services:
       - "9000"
       - "9001"
 
+  redis:
+    image: redis:7-alpine
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save 900 1
+    volumes:
+      - redis_data_prod:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    # Redis nu e expus public — doar backend-ul vorbește cu el.
+    expose:
+      - "6379"
+
   backend:
     build:
       context: ./backend
@@ -53,6 +68,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_started
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     expose:
       - "8000"
@@ -91,5 +108,6 @@ services:
 volumes:
   postgres_data_prod:
   minio_data_prod:
+  redis_data_prod:
   caddy_data:
   caddy_config:

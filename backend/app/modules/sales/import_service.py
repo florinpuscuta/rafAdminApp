@@ -12,6 +12,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.cache import invalidate_tenant as cache_invalidate_tenant
 from app.core.db import SessionLocal
 from app.modules.agents import service as agents_service
 from app.modules.agents.models import Agent, AgentAlias, AgentStoreAssignment
@@ -251,6 +252,17 @@ async def _run(
         },
     )
     await jobs.finish_stage(job_id, "finalize")
+
+    # Invalidam cache-ul agregatelor pentru acest tenant — datele s-au schimbat.
+    # Fail-soft: dacă Redis e jos, log + ignoră.
+    try:
+        deleted_keys = await cache_invalidate_tenant(tenant_id)
+        if deleted_keys:
+            logger.info(
+                "cache invalidated for tenant=%s: %d keys", tenant_id, deleted_keys
+            )
+    except Exception as exc:
+        logger.warning("cache invalidate after import failed: %s", exc)
 
     return {
         "inserted": inserted,

@@ -79,6 +79,10 @@ async def consolidat_ka(
     months_list = _parse_months(months, default_to_ytd=True)
 
     # Iteram per-org si sumam (paritate cu single-org views).
+    # Pentru SIKADP (multi-org), agregam dupa NUMELE agentului si NUMELE
+    # magazinului — store_id-urile sunt tenant-scoped, deci acelasi magazin
+    # are UUID diferit in Adeplast vs Sika. Foloseste numele ca cheie de
+    # deduplicare cross-org.
     total_y1 = Decimal(0)
     total_y2 = Decimal(0)
     by_name: dict[str, dict] = {}
@@ -96,17 +100,33 @@ async def consolidat_ka(
         agents = await agents_service.get_many(session, tid, agent_ids) if agent_ids else {}
         agents_map = {aid: a.full_name for aid, a in agents.items()}
 
+        # Rezolvam toate store_id-urile la nume pentru aceasta orga (un singur query).
+        all_store_ids: set[UUID] = set()
+        for r in agent_rows_raw:
+            all_store_ids.update(r["store_ids"])
+        stores_map = (
+            await stores_service.get_many(session, tid, list(all_store_ids))
+            if all_store_ids else {}
+        )
+
         for r in agent_rows_raw:
             name = agents_map.get(r["agent_id"], "(necunoscut)") if r["agent_id"] else "(nemapat)"
+            # Convertim store_ids (tenant-scoped UUID) la nume (cross-org safe).
+            store_names: set[str] = {
+                stores_map[sid].name
+                for sid in r["store_ids"]
+                if sid in stores_map
+            }
             existing = by_name.get(name)
             if existing is None:
                 by_name[name] = {
                     "agent_id": r["agent_id"], "name": name,
-                    "stores_count": r["stores_count"],
+                    "store_names": store_names,
                     "sales_y1": r["sales_y1"], "sales_y2": r["sales_y2"],
                 }
             else:
-                existing["stores_count"] += r["stores_count"]
+                # Cross-org: union pe nume → magazinele comune se numara o singura data.
+                existing["store_names"].update(store_names)
                 existing["sales_y1"] += r["sales_y1"]
                 existing["sales_y2"] += r["sales_y2"]
 
@@ -119,7 +139,7 @@ async def consolidat_ka(
         [
             ConsolidatAgentRow(
                 agent_id=r["agent_id"], name=r["name"],
-                stores_count=r["stores_count"],
+                stores_count=len(r["store_names"]),
                 sales_y1=r["sales_y1"], sales_y2=r["sales_y2"],
                 diff=r["sales_y2"] - r["sales_y1"],
                 pct=service.pct_change(r["sales_y1"], r["sales_y2"]),
