@@ -31,6 +31,7 @@ from app.modules.brands.models import Brand
 from app.modules.product_categories.models import ProductCategory
 from app.modules.products.models import Product
 from app.modules.sales.models import ImportBatch, RawSale
+from app.modules.stores.models import Store
 
 
 MONTHS_WINDOW = 3
@@ -584,42 +585,52 @@ async def compute_insights(
         return None
     years, months = _ym_filter(pairs)
 
-    # ── Query 1: agregare per magazin (rank inputs) ──────────────────────
+    # ── Query 1: agregare per magazin canonic (rank inputs) ──────────────
+    # Group by Store.id (canonic), JOIN cu Store pentru nume. Magazinele
+    # fără store_id în RawSale (alias absent) sunt excluse din clasament.
     stmt_stores = (
         select(
-            RawSale.client.label("client"),
+            Store.id.label("sid"),
+            Store.name.label("sname"),
             func.sum(RawSale.amount).label("total_amt"),
             func.count(func.distinct(RawSale.product_id)).label("sku_cnt"),
         )
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+        .join(Store, Store.id == RawSale.store_id)
         .where(
             RawSale.tenant_id == tenant_id,
             RawSale.year.in_(years),
             RawSale.month.in_(months),
             func.upper(RawSale.channel) == "KA",
             ImportBatch.source.in_(sources),
-            RawSale.client.is_not(None),
+            RawSale.store_id.is_not(None),
             RawSale.product_id.is_not(None),
         )
-        .group_by(RawSale.client)
+        .group_by(Store.id, Store.name)
     )
     rows_stores = (await session.execute(stmt_stores)).all()
     if not rows_stores:
         return None
 
     by_value: list[tuple[str, Decimal]] = sorted(
-        ((str(r.client), Decimal(r.total_amt or 0)) for r in rows_stores),
+        ((str(r.sname), Decimal(r.total_amt or 0)) for r in rows_stores),
         key=lambda t: -t[1],
     )
     by_skus: list[tuple[str, int]] = sorted(
-        ((str(r.client), int(r.sku_cnt or 0)) for r in rows_stores),
+        ((str(r.sname), int(r.sku_cnt or 0)) for r in rows_stores),
         key=lambda t: -t[1],
     )
     rank_by_value = _make_rank(store, by_value)
     rank_by_skus = _make_rank(store, by_skus)
 
-    # Magazinul nu apare deloc în date — întoarcem None (UI-ul afișează stare goală).
+    # Magazinul nu apare deloc — fallback rank pe scope full chain
     if rank_by_value.rank == 0:
+        return None
+
+    # Găsim store_id-ul magazinului țintă (canonic) — îl folosim mai jos
+    # pentru filtrele de produse vândute / nevândute la magazin.
+    store_id = next((r.sid for r in rows_stores if r.sname == store), None)
+    if store_id is None:
         return None
 
     store_total_value = next((v for n, v in by_value if n == store), Decimal(0))
@@ -643,13 +654,14 @@ async def compute_insights(
     else:
         size_factor = Decimal("1")
 
-    # ── Query 2: produse + magazine care le listează (+ cantități) ───────
+    # ── Query 2: produse + magazine canonice care le listează (+ qty) ────
+    # Listed_count = nr DISTINCT store_id (canonic), nu raw client.
     stmt_products = (
         select(
             RawSale.product_id.label("pid"),
             func.sum(RawSale.amount).label("total_amt"),
             func.sum(RawSale.quantity).label("total_qty"),
-            func.count(func.distinct(RawSale.client)).label("client_cnt"),
+            func.count(func.distinct(RawSale.store_id)).label("store_cnt"),
         )
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
         .where(
@@ -659,7 +671,7 @@ async def compute_insights(
             func.upper(RawSale.channel) == "KA",
             ImportBatch.source.in_(sources),
             RawSale.product_id.is_not(None),
-            RawSale.client.is_not(None),
+            RawSale.store_id.is_not(None),
         )
         .group_by(RawSale.product_id)
         .order_by(func.sum(RawSale.amount).desc())
@@ -667,13 +679,13 @@ async def compute_insights(
     )
     rows_products = (await session.execute(stmt_products)).all()
 
-    # ── Query 3: produse vândute la magazinul țintă ──────────────────────
+    # ── Query 3: produse vândute la magazinul țintă (filter pe store_id) ─
     stmt_own = (
         select(func.distinct(RawSale.product_id).label("pid"))
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
         .where(
             RawSale.tenant_id == tenant_id,
-            RawSale.client == store,
+            RawSale.store_id == store_id,
             RawSale.year.in_(years),
             RawSale.month.in_(months),
             func.upper(RawSale.channel) == "KA",
@@ -728,7 +740,7 @@ async def compute_insights(
         pid = r.pid
         total_amt = Decimal(r.total_amt or 0)
         total_qty = Decimal(r.total_qty or 0)
-        listed_count = int(r.client_cnt or 0)
+        listed_count = int(r.store_cnt or 0)
         if listed_count == 0 or total_amt <= 0:
             continue
         listed_dec = Decimal(listed_count)
