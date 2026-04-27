@@ -341,6 +341,7 @@ function PromotionForm({
           <button type="button" onClick={onClose} style={styles.closeBtn}>×</button>
         </div>
 
+        <div style={styles.modalBody}>
         <div style={styles.formGrid}>
           <div style={styles.formField}>
             <label style={styles.formLabel}>Nume</label>
@@ -464,10 +465,25 @@ function PromotionForm({
         </div>
 
         {err && <div style={styles.errorBox}>{err}</div>}
+        </div>
 
         <div style={styles.modalFooter}>
-          <button type="button" onClick={onClose} style={styles.secondaryBtn} disabled={busy}>Renunta</button>
-          <button type="button" onClick={onSubmit} disabled={busy} style={styles.primaryBtn}>
+          <button
+            type="button"
+            data-wide="true"
+            onClick={onClose}
+            style={styles.secondaryBtn}
+            disabled={busy}
+          >
+            Renunta
+          </button>
+          <button
+            type="button"
+            data-wide="true"
+            onClick={onSubmit}
+            disabled={busy}
+            style={styles.primaryBtn}
+          >
             {busy ? "Salveaza..." : initial ? "Salveaza" : "Creeaza"}
           </button>
         </div>
@@ -1272,9 +1288,10 @@ const styles: Record<string, CSSProperties> = {
   },
   modal: {
     background: "var(--card)", border: "1px solid var(--border)",
-    borderRadius: 10, padding: 20, maxWidth: 760, width: "100%",
-    maxHeight: "90vh", overflowY: "auto",
-    display: "flex", flexDirection: "column", gap: 12,
+    borderRadius: 10, maxWidth: 760, width: "100%",
+    maxHeight: "90vh",
+    display: "flex", flexDirection: "column",
+    overflow: "hidden",
   },
   modalFull: {
     background: "var(--card)",
@@ -1290,7 +1307,12 @@ const styles: Record<string, CSSProperties> = {
   },
   modalHeader: {
     display: "flex", justifyContent: "space-between", alignItems: "center",
-    paddingBottom: 8, borderBottom: "1px solid var(--border)",
+    padding: "16px 20px", borderBottom: "1px solid var(--border)",
+    flexShrink: 0,
+  },
+  modalBody: {
+    flex: 1, overflowY: "auto", padding: "16px 20px",
+    display: "flex", flexDirection: "column", gap: 12,
   },
   closeBtn: {
     background: "transparent", border: "none", color: "var(--text)",
@@ -1298,7 +1320,9 @@ const styles: Record<string, CSSProperties> = {
   },
   modalFooter: {
     display: "flex", justifyContent: "flex-end", gap: 8,
-    paddingTop: 10, borderTop: "1px solid var(--border)",
+    padding: "12px 20px", borderTop: "1px solid var(--border)",
+    background: "var(--card)", flexShrink: 0,
+    position: "sticky", bottom: 0, zIndex: 2,
   },
   formGrid: {
     display: "grid",

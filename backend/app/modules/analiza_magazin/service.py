@@ -114,7 +114,7 @@ def _ym_filter(pairs: list[tuple[int, int]]) -> tuple[set[int], set[int]]:
 
 @dataclass
 class StoreOption:
-    key: str          # RawSale.client
+    key: str          # Store.name canonic (cheie_finala din Noemi)
     chain: str
     agent: str | None = None  # agent dominant pentru magazin
 
@@ -141,14 +141,18 @@ async def list_stores(
     # la `Agent.full_name`. Folosim `agent_id` (resolvedul prin StoreAgentMapping),
     # NU textul din `RawSale.agent` — textul brut poate fi al persoanei care a
     # încărcat raportul, nu al agentului alocat magazinului.
+    # Folosim Store.name (canonic) prin JOIN pe Store.id = RawSale.store_id.
+    # NU folosim RawSale.client (text brut din XLSX) — acela poate avea formate
+    # multiple pentru același magazin fizic, ceea ce duce la duplicare în UI.
     stmt = (
         select(
-            RawSale.client,
+            Store.name.label("client"),
             RawSale.agent_id,
             Agent.full_name,
             func.count().label("cnt"),
         )
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+        .join(Store, Store.id == RawSale.store_id)
         .outerjoin(Agent, Agent.id == RawSale.agent_id)
         .where(
             RawSale.tenant_id == tenant_id,
@@ -156,11 +160,11 @@ async def list_stores(
             RawSale.month.in_(months),
             func.upper(RawSale.channel) == "KA",
             ImportBatch.source.in_(sources),
-            RawSale.client.is_not(None),
+            RawSale.store_id.is_not(None),
         )
-        .group_by(RawSale.client, RawSale.agent_id, Agent.full_name)
+        .group_by(Store.name, RawSale.agent_id, Agent.full_name)
     )
-    # Pereche (client, agent_id) cu cel mai mare cnt. agent_id NULL contează
+    # Pereche (store_name, agent_id) cu cel mai mare cnt. agent_id NULL contează
     # doar ca fallback dacă nu există niciun rând cu agent rezolvat.
     best: dict[str, tuple[int, str | None]] = {}
     for r in (await session.execute(stmt)).all():
@@ -229,9 +233,10 @@ async def _chain_stores(
     months: set[int],
     sources: list[str],
 ) -> list[str]:
-    """Toate `RawSale.client` din `chain` cu date în fereastră."""
+    """Toate `Store.name` (canonic) din `chain` cu date în fereastră."""
     stmt = (
-        select(RawSale.client)
+        select(Store.name)
+        .join(RawSale, RawSale.store_id == Store.id)
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
         .where(
             RawSale.tenant_id == tenant_id,
@@ -239,14 +244,14 @@ async def _chain_stores(
             RawSale.month.in_(months),
             func.upper(RawSale.channel) == "KA",
             ImportBatch.source.in_(sources),
-            RawSale.client.is_not(None),
+            RawSale.store_id.is_not(None),
         )
         .distinct()
     )
     return [
-        str(r.client)
+        str(r.name)
         for r in (await session.execute(stmt)).all()
-        if _extract_chain(str(r.client)) == chain
+        if _extract_chain(str(r.name)) == chain
     ]
 
 
@@ -263,24 +268,26 @@ async def _chain_product_rows(
     chain-totals + stores_selling_count dintr-un singur query."""
     if not clients:
         return []
+    # `clients` sunt acum Store.name canonice — JOIN cu Store ca să filtrăm.
     stmt = (
         select(
             RawSale.product_id,
-            RawSale.client,
+            Store.name.label("client"),
             func.coalesce(func.sum(RawSale.amount), 0).label("amt"),
             func.coalesce(func.sum(RawSale.quantity), 0).label("qty"),
         )
         .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+        .join(Store, Store.id == RawSale.store_id)
         .where(
             RawSale.tenant_id == tenant_id,
             RawSale.year.in_(years),
             RawSale.month.in_(months),
             func.upper(RawSale.channel) == "KA",
             ImportBatch.source.in_(sources),
-            RawSale.client.in_(clients),
+            Store.name.in_(clients),
             RawSale.product_id.is_not(None),
         )
-        .group_by(RawSale.product_id, RawSale.client)
+        .group_by(RawSale.product_id, Store.name)
     )
     return [
         {

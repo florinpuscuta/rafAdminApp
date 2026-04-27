@@ -100,6 +100,17 @@ class BrandSplit:
 
 
 @dataclass
+class ProductRow:
+    product_id: UUID
+    code: str
+    name: str
+    category_code: str | None
+    category_label: str | None
+    curr: Metrics = field(default_factory=Metrics)
+    yoy: Metrics = field(default_factory=Metrics)
+
+
+@dataclass
 class DashboardData:
     scope: str
     store_id: UUID
@@ -114,6 +125,7 @@ class DashboardData:
     monthly: list[MonthSeries]
     categories: list[CategoryRow]
     brand_split: BrandSplit
+    products: list[ProductRow] = field(default_factory=list)
 
 
 # ── Selectoare client / magazin ──────────────────────────────────────────
@@ -609,6 +621,100 @@ async def _brand_split(
     return out
 
 
+async def _products(
+    session: AsyncSession,
+    tenant_id: UUID,
+    *,
+    scope: str,
+    store_id: UUID,
+    sources: list[str],
+    pairs_curr: list[tuple[int, int]],
+    pairs_yoy: list[tuple[int, int]],
+) -> list[ProductRow]:
+    """Top produse vândute la magazin în fereastra curentă, cu YoY.
+
+    - scope=adp  → categoria = ProductCategory.code/label
+    - scope=sika → categoria = TM derivat din clasificator (lazy import)
+    Sortat desc după sales_curr. Toate produsele cu vânzări (sau qty) > 0
+    în fereastra curentă sunt incluse — UI poate decide cap de afișare.
+    """
+    if not pairs_curr:
+        return []
+    all_pairs = list(pairs_curr) + list(pairs_yoy)
+    years = {y for (y, _m) in all_pairs}
+    months = {m for (_y, m) in all_pairs}
+    pairs_curr_set = set(pairs_curr)
+    pairs_yoy_set = set(pairs_yoy)
+
+    sales_stmt = (
+        select(
+            RawSale.year,
+            RawSale.month,
+            RawSale.product_id,
+            Product.code.label("p_code"),
+            Product.name.label("p_name"),
+            ProductCategory.code.label("cat_code"),
+            ProductCategory.label.label("cat_label"),
+            func.coalesce(func.sum(RawSale.amount), 0).label("amt"),
+            func.coalesce(func.sum(RawSale.quantity), 0).label("qty"),
+        )
+        .join(ImportBatch, ImportBatch.id == RawSale.batch_id)
+        .join(Product, Product.id == RawSale.product_id)
+        .outerjoin(ProductCategory, ProductCategory.id == Product.category_id)
+        .where(
+            RawSale.tenant_id == tenant_id,
+            RawSale.store_id == store_id,
+            RawSale.year.in_(years),
+            RawSale.month.in_(months),
+            ImportBatch.source.in_(sources),
+            RawSale.product_id.is_not(None),
+        )
+        .group_by(
+            RawSale.year, RawSale.month, RawSale.product_id,
+            Product.code, Product.name,
+            ProductCategory.code, ProductCategory.label,
+        )
+    )
+    sales_rows = _filter_pairs((await session.execute(sales_stmt)).all(), all_pairs)
+
+    classify = None
+    if scope == "sika":
+        from app.modules.grupe_produse.service import classify_sika_tm
+        classify = classify_sika_tm
+
+    rows: dict[UUID, ProductRow] = {}
+    for r in sales_rows:
+        pid = r.product_id
+        if pid not in rows:
+            cat_code = str(r.cat_code) if r.cat_code else None
+            cat_label = str(r.cat_label) if r.cat_label else cat_code
+            if classify is not None:
+                tm = classify(str(r.p_name or ""))
+                cat_code = tm
+                cat_label = tm
+            rows[pid] = ProductRow(
+                product_id=pid,
+                code=str(r.p_code or ""),
+                name=str(r.p_name or ""),
+                category_code=cat_code,
+                category_label=cat_label,
+            )
+        ym = (int(r.year), int(r.month))
+        amt = Decimal(r.amt or 0)
+        qty = Decimal(r.qty or 0)
+        target = rows[pid].curr if ym in pairs_curr_set else (
+            rows[pid].yoy if ym in pairs_yoy_set else None
+        )
+        if target is None:
+            continue
+        target.sales += amt
+        target.quantity += qty
+
+    out = list(rows.values())
+    out.sort(key=lambda p: p.curr.sales, reverse=True)
+    return out
+
+
 # ── Public entry point ───────────────────────────────────────────────────
 
 
@@ -676,6 +782,10 @@ async def build_dashboard(
         session, tenant_id, store_id=store_id, sources=sources,
         pairs_curr=pairs_curr, pairs_yoy=pairs_yoy,
     )
+    products = await _products(
+        session, tenant_id, scope=scope, store_id=store_id, sources=sources,
+        pairs_curr=pairs_curr, pairs_yoy=pairs_yoy,
+    )
 
     return DashboardData(
         scope=scope,
@@ -691,4 +801,5 @@ async def build_dashboard(
         monthly=monthly,
         categories=categories,
         brand_split=brand_split,
+        products=products,
     )

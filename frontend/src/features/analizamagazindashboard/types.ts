@@ -52,6 +52,16 @@ export interface AMDBrandSplit {
   privateLabelYoy: AMDMetrics;
 }
 
+export interface AMDProductRow {
+  productId: string;
+  code: string;
+  name: string;
+  categoryCode: string | null;
+  categoryLabel: string | null;
+  curr: AMDMetrics;
+  yoy: AMDMetrics;
+}
+
 export interface AMDPair {
   year: number;
   month: number;
@@ -71,4 +81,5 @@ export interface AMDDashboardResponse {
   monthly: AMDMonthSeries[];
   categories: AMDCategoryRow[];
   brandSplit: AMDBrandSplit;
+  products: AMDProductRow[];
 }

@@ -49,6 +49,16 @@ class AMDBrandSplit(APISchema):
     private_label_yoy: AMDMetrics
 
 
+class AMDProductRow(APISchema):
+    product_id: UUID
+    code: str
+    name: str
+    category_code: str | None
+    category_label: str | None
+    curr: AMDMetrics
+    yoy: AMDMetrics
+
+
 class AMDPair(APISchema):
     year: int
     month: int
@@ -68,3 +78,4 @@ class AMDDashboardResponse(APISchema):
     monthly: list[AMDMonthSeries] = Field(default_factory=list)
     categories: list[AMDCategoryRow] = Field(default_factory=list)
     brand_split: AMDBrandSplit
+    products: list[AMDProductRow] = Field(default_factory=list)

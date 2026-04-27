@@ -14,6 +14,7 @@ from app.modules.analiza_magazin_dashboard.schemas import (
     AMDMetrics,
     AMDMonthSeries,
     AMDPair,
+    AMDProductRow,
     AMDStoreOption,
     AMDStoresResponse,
 )
@@ -143,4 +144,12 @@ async def get_dashboard(
             brand_yoy=_metrics(data.brand_split.brand_yoy),
             private_label_yoy=_metrics(data.brand_split.private_label_yoy),
         ),
+        products=[
+            AMDProductRow(
+                product_id=p.product_id, code=p.code, name=p.name,
+                category_code=p.category_code, category_label=p.category_label,
+                curr=_metrics(p.curr), yoy=_metrics(p.yoy),
+            )
+            for p in data.products
+        ],
     )

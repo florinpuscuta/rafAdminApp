@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useMemo,
   useState,
@@ -255,6 +256,7 @@ export default function AnalizaMagazinDashboardPage() {
             value={selectedClient}
             onChange={(e) => setSelectedClient(e.target.value)}
             disabled={loadingClients || clients.length === 0}
+            data-wide="true"
             style={styles.select}
           >
             {clients.map((c) => (
@@ -263,7 +265,7 @@ export default function AnalizaMagazinDashboardPage() {
           </select>
         </div>
 
-        <div style={{ ...styles.controlBlock, flex: 1 }}>
+        <div style={{ ...styles.controlBlock, flex: 1, minWidth: 320 }}>
           <span style={styles.controlLabel}>Magazin</span>
           <select
             value={selectedStoreId}
@@ -275,6 +277,7 @@ export default function AnalizaMagazinDashboardPage() {
               setPersistedStoreName(found?.name ?? "");
             }}
             disabled={loadingStores || stores.length === 0}
+            data-wide="true"
             style={styles.selectWide}
           >
             {stores.length === 0 && !loadingStores && (
@@ -564,6 +567,48 @@ function CategoriesSection({ data }: { data: AMDDashboardResponse }) {
     ? "Pe Target Market"
     : "Pe categorie de produs";
 
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState<string>("");
+
+  // Map category code → produsele acelei categorii (din data.products).
+  const productsByCategory = useMemo(() => {
+    const m = new Map<string, typeof data.products>();
+    for (const p of data.products) {
+      const key = p.categoryCode ?? p.categoryLabel ?? "—";
+      const arr = m.get(key) ?? [];
+      arr.push(p);
+      m.set(key, arr);
+    }
+    return m;
+  }, [data.products]);
+
+  // Filtrare globală: dacă `search` e activ, păstrăm doar produsele cu match
+  // (cod / nume / categorie) și auto-expandăm categoriile care au produse rămase.
+  const filteredProductsByCategory = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return productsByCategory;
+    const m = new Map<string, typeof data.products>();
+    for (const [k, arr] of productsByCategory.entries()) {
+      const matched = arr.filter((p) =>
+        p.name.toLowerCase().includes(q)
+        || p.code.toLowerCase().includes(q)
+        || (p.categoryLabel ?? p.categoryCode ?? "").toLowerCase().includes(q)
+      );
+      if (matched.length > 0) m.set(k, matched);
+    }
+    return m;
+  }, [productsByCategory, search, data.products]);
+
+  const searchActive = search.trim().length > 0;
+
+  function toggle(code: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(code)) next.delete(code); else next.add(code);
+      return next;
+    });
+  }
+
   if (data.categories.length === 0) {
     return (
       <section style={styles.section}>
@@ -577,59 +622,149 @@ function CategoriesSection({ data }: { data: AMDDashboardResponse }) {
     (sum, c) => sum + toNum(c.curr.sales),
     0,
   );
+  const totalCurrAll = data.products.reduce(
+    (s, p) => s + toNum(p.curr.sales),
+    0,
+  );
+
+  // Când search e activ, ascundem categoriile fără produse match-uite.
+  const visibleCategories = searchActive
+    ? data.categories.filter((c) => filteredProductsByCategory.has(c.code))
+    : data.categories;
 
   return (
     <section style={styles.section}>
-      <h2 style={styles.sectionTitle}>{sectionTitle}</h2>
-      <table style={styles.table}>
-        <thead>
-          <tr>
-            <th style={styles.thLeft}>{groupNoun}</th>
-            <th style={styles.thRight}>Vânzări curent</th>
-            <th style={styles.thRight}>% mix</th>
-            <th style={styles.thRight}>An precedent</th>
-            <th style={styles.thRight}>Δ %</th>
-            <th style={styles.thRight}>SKU curent</th>
-            <th style={styles.thRight}>SKU an prec.</th>
-            <th style={styles.thRight}>Δ SKU</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.categories.map((c) => {
-            const sc = toNum(c.curr.sales);
-            const sp = toNum(c.yoy.sales);
-            const dPct = pctDelta(sc, sp);
-            const mix = totalCurr > 0 ? (sc / totalCurr) * 100 : 0;
-            const dSku = c.curr.skuCount - c.yoy.skuCount;
-            return (
-              <tr key={c.code}>
-                <td style={styles.tdLeft}>
-                  <strong>{c.code}</strong>
-                  {c.label !== c.code && (
-                    <span style={styles.muted}> · {c.label}</span>
-                  )}
-                </td>
-                <td style={styles.tdRight}>{fmtRo(sc, 0)}</td>
-                <td style={styles.tdRight}>{mix.toFixed(1)}%</td>
-                <td style={styles.tdRight}>{fmtRo(sp, 0)}</td>
-                <td style={{ ...styles.tdRight, color: deltaColor(dPct) }}>
-                  {fmtPct(dPct)}
-                </td>
-                <td style={styles.tdRight}>{c.curr.skuCount}</td>
-                <td style={styles.tdRight}>{c.yoy.skuCount}</td>
-                <td
-                  style={{
-                    ...styles.tdRight,
-                    color: deltaColor(dSku === 0 ? 0 : dSku > 0 ? 1 : -1),
-                  }}
-                >
-                  {dSku > 0 ? "+" : ""}{dSku}
+      <div style={styles.productsHeader}>
+        <h2 style={{ ...styles.sectionTitle, margin: 0 }}>{sectionTitle}</h2>
+        <input
+          type="search"
+          placeholder="Caută cod / denumire / categorie…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          data-wide="true"
+          style={styles.productsSearch}
+        />
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={styles.table}>
+          <thead>
+            <tr>
+              <th style={{ ...styles.thLeft, width: 28 }} aria-label="expand"></th>
+              <th style={styles.thLeft}>{groupNoun}</th>
+              <th style={styles.thRight}>Vânzări curent</th>
+              <th style={styles.thRight}>% mix</th>
+              <th style={styles.thRight}>An precedent</th>
+              <th style={styles.thRight}>Δ %</th>
+              <th style={styles.thRight}>SKU curent</th>
+              <th style={styles.thRight}>SKU an prec.</th>
+              <th style={styles.thRight}>Δ SKU</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleCategories.length === 0 && (
+              <tr>
+                <td colSpan={9} style={{ ...styles.tdLeft, color: "#94a3b8" }}>
+                  Nicio categorie nu corespunde căutării.
                 </td>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
+            )}
+            {visibleCategories.map((c) => {
+              const sc = toNum(c.curr.sales);
+              const sp = toNum(c.yoy.sales);
+              const dPct = pctDelta(sc, sp);
+              const mix = totalCurr > 0 ? (sc / totalCurr) * 100 : 0;
+              const dSku = c.curr.skuCount - c.yoy.skuCount;
+              const products = filteredProductsByCategory.get(c.code) ?? [];
+              const isOpen = searchActive || expanded.has(c.code);
+              const hasProducts = products.length > 0;
+              return (
+                <Fragment key={c.code}>
+                  <tr
+                    onClick={() => hasProducts && toggle(c.code)}
+                    style={{
+                      cursor: hasProducts ? "pointer" : "default",
+                      background: isOpen ? "#f8fafc" : undefined,
+                    }}
+                  >
+                    <td style={{ ...styles.tdLeft, textAlign: "center", color: "#64748b" }}>
+                      {hasProducts ? (isOpen ? "▼" : "▶") : ""}
+                    </td>
+                    <td style={styles.tdLeft}>
+                      <strong>{c.code}</strong>
+                      {c.label !== c.code && (
+                        <span style={styles.muted}> · {c.label}</span>
+                      )}
+                      {hasProducts && (
+                        <span style={{ ...styles.muted, marginLeft: 8 }}>
+                          ({products.length} produse)
+                        </span>
+                      )}
+                    </td>
+                    <td style={styles.tdRight}>{fmtRo(sc, 0)}</td>
+                    <td style={styles.tdRight}>{mix.toFixed(1)}%</td>
+                    <td style={styles.tdRight}>{fmtRo(sp, 0)}</td>
+                    <td style={{ ...styles.tdRight, color: deltaColor(dPct) }}>
+                      {fmtPct(dPct)}
+                    </td>
+                    <td style={styles.tdRight}>{c.curr.skuCount}</td>
+                    <td style={styles.tdRight}>{c.yoy.skuCount}</td>
+                    <td
+                      style={{
+                        ...styles.tdRight,
+                        color: deltaColor(dSku === 0 ? 0 : dSku > 0 ? 1 : -1),
+                      }}
+                    >
+                      {dSku > 0 ? "+" : ""}{dSku}
+                    </td>
+                  </tr>
+                  {isOpen && hasProducts && (
+                    <tr>
+                      <td colSpan={9} style={styles.subTableCell}>
+                        <table style={styles.subTable}>
+                          <thead>
+                            <tr>
+                              <th style={styles.thLeft}>Produs</th>
+                              <th style={styles.thRight}>Cantitate</th>
+                              <th style={styles.thRight}>Vânzări curent</th>
+                              <th style={styles.thRight}>% mix</th>
+                              <th style={styles.thRight}>An precedent</th>
+                              <th style={styles.thRight}>Δ %</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {products.map((p) => {
+                              const psc = toNum(p.curr.sales);
+                              const psp = toNum(p.yoy.sales);
+                              const pqc = toNum(p.curr.quantity);
+                              const pdPct = pctDelta(psc, psp);
+                              const pmix = totalCurrAll > 0 ? (psc / totalCurrAll) * 100 : 0;
+                              return (
+                                <tr key={p.productId}>
+                                  <td style={styles.tdLeft}>
+                                    <div style={{ fontWeight: 600 }}>{p.name}</div>
+                                    <div style={{ fontSize: 11, color: "#94a3b8" }}>{p.code}</div>
+                                  </td>
+                                  <td style={styles.tdRight}>{fmtRo(pqc, 1)}</td>
+                                  <td style={styles.tdRight}>{fmtRo(psc, 0)}</td>
+                                  <td style={styles.tdRight}>{pmix.toFixed(1)}%</td>
+                                  <td style={styles.tdRight}>{fmtRo(psp, 0)}</td>
+                                  <td style={{ ...styles.tdRight, color: deltaColor(pdPct) }}>
+                                    {fmtPct(pdPct)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </section>
   );
 }
@@ -781,12 +916,15 @@ const styles: Record<string, CSSProperties> = {
     minWidth: 160,
   },
   selectWide: {
-    padding: "6px 10px",
+    padding: "10px 14px",
     border: "1px solid #cbd5e1",
-    borderRadius: 6,
+    borderRadius: 8,
     background: "#fff",
-    fontSize: 14,
+    fontSize: 16,
+    fontWeight: 600,
+    color: "#0f172a",
     width: "100%",
+    minHeight: 42,
   },
   error: {
     padding: 12,
@@ -813,6 +951,37 @@ const styles: Record<string, CSSProperties> = {
     fontWeight: 600,
     margin: "0 0 12px",
     color: "#0f172a",
+  },
+  productsHeader: {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 12,
+    flexWrap: "wrap",
+    marginBottom: 12,
+  },
+  productsSearch: {
+    padding: "8px 12px",
+    border: "1px solid #cbd5e1",
+    borderRadius: 6,
+    fontSize: 13,
+    minWidth: 260,
+    flex: "1 1 260px",
+    maxWidth: 420,
+  },
+  subTableCell: {
+    padding: "0 0 0 28px",
+    background: "#f8fafc",
+    borderBottom: "1px solid #f1f5f9",
+  },
+  subTable: {
+    width: "100%",
+    borderCollapse: "collapse",
+    fontSize: 12,
+    background: "#fff",
+    border: "1px solid #e2e8f0",
+    borderRadius: 6,
+    margin: "8px 8px 8px 0",
   },
   kpiRow: {
     display: "grid",

@@ -94,6 +94,7 @@ export default function ArboreProdusePage() {
   const [openBrands, setOpenBrands] = useState<Set<string>>(new Set());
   const [openCats, setOpenCats] = useState<Set<string>>(new Set());
   const [openSubs, setOpenSubs] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState<string>("");
 
   // Traduce state-ul modul/luni → argumentul pentru getArboreProduse.
   const monthsArg: number[] | "all" | undefined = useMemo(() => {
@@ -136,7 +137,42 @@ export default function ArboreProdusePage() {
   }
 
   const grand = toNum(data?.grandSales);
-  const brands = data?.brands ?? [];
+  const allBrands = data?.brands ?? [];
+
+  // Filtrare arbore pe query — păstrăm doar produsele cu match pe nume/cod;
+  // categoriile/subgrupele/brandurile fără produse match sunt ascunse.
+  const brands = useMemo<TreeBrand[]>(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return allBrands;
+    const matchProduct = (p: TreeProduct): boolean =>
+      p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q);
+    const out: TreeBrand[] = [];
+    for (const b of allBrands) {
+      const cats: TreeCategory[] = [];
+      for (const c of b.categories) {
+        const hasSubs = c.subgroups != null && c.subgroups.length > 0;
+        if (hasSubs) {
+          const subs: TreeSubgroup[] = [];
+          for (const s of c.subgroups!) {
+            const prods = s.products.filter(matchProduct);
+            if (prods.length > 0) subs.push({ ...s, products: prods });
+          }
+          if (subs.length > 0) {
+            cats.push({ ...c, subgroups: subs, products: c.products.filter(matchProduct) });
+          }
+        } else {
+          const prods = c.products.filter(matchProduct);
+          if (prods.length > 0) cats.push({ ...c, products: prods });
+        }
+      }
+      if (cats.length > 0) out.push({ ...b, categories: cats });
+    }
+    return out;
+  }, [allBrands, search]);
+
+  // Când search e activ, considerăm toate nodurile expandate (vrem să vedem
+  // rezultatele direct, fără să trebuiască să dăm click pe fiecare).
+  const searchActive = search.trim().length > 0;
 
   const toggleBrand = (k: string) => {
     setOpenBrands((s) => {
@@ -188,6 +224,14 @@ export default function ArboreProdusePage() {
             {YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
           </select>
         </label>
+        <input
+          type="search"
+          placeholder="Caută produs (cod sau denumire)…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          data-wide="true"
+          style={styles.search}
+        />
         <div style={{ marginLeft: "auto", fontSize: 12, color: "var(--fg-muted,#888)" }}>
           {year}: <b>{fmtRo(grand)}</b> · {year - 1}: {fmtRo(data?.grandSalesPrev)}
           {" "}<DiffPill pct={pctChange(data?.grandSales, data?.grandSalesPrev)} />
@@ -321,11 +365,25 @@ export default function ArboreProdusePage() {
             </div>
           )}
 
+          {searchActive && (
+            <div style={{
+              padding: "6px 10px", marginBottom: 8,
+              background: "rgba(59,130,246,0.08)",
+              border: "1px solid rgba(59,130,246,0.3)",
+              borderRadius: 6, fontSize: 12,
+            }}>
+              Filtru activ: <b>{search}</b> ·{" "}
+              {brands.reduce((sum, b) => sum + b.categories.reduce(
+                (s, c) => s + (c.subgroups?.reduce((ss, sg) => ss + sg.products.length, 0)
+                  ?? c.products.length), 0
+              ), 0)} produse găsite în {brands.length} branduri
+            </div>
+          )}
           {/* Tree */}
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {brands.map((b) => {
               const bKey = b.brandId ?? b.name;
-              const bOpen = openBrands.has(bKey);
+              const bOpen = searchActive || openBrands.has(bKey);
               return (
                 <div key={bKey} style={{
                   ...styles.brandBlock,
@@ -356,11 +414,12 @@ export default function ArboreProdusePage() {
                             key={(c.categoryId ?? c.label) + bKey}
                             brandKey={bKey}
                             c={c}
-                            open={openCats.has(catKey)}
+                            open={searchActive || openCats.has(catKey)}
                             onToggle={() => toggleCat(catKey)}
                             openSubs={openSubs}
                             onToggleSub={toggleSub}
                             catKey={catKey}
+                            searchActive={searchActive}
                           />
                         );
                       })}
@@ -469,10 +528,11 @@ function SubgroupBlock({
 }
 
 function CategoryBlock({
-  brandKey, c, open, onToggle, openSubs, onToggleSub, catKey,
+  brandKey, c, open, onToggle, openSubs, onToggleSub, catKey, searchActive,
 }: {
   brandKey: string; c: TreeCategory; open: boolean; onToggle: () => void;
   openSubs: Set<string>; onToggleSub: (k: string) => void; catKey: string;
+  searchActive?: boolean;
 }) {
   void brandKey;
   const hasSubgroups = c.subgroups != null && c.subgroups.length > 0;
@@ -501,7 +561,7 @@ function CategoryBlock({
                 <SubgroupBlock
                   key={subKey}
                   s={s}
-                  open={openSubs.has(subKey)}
+                  open={searchActive || openSubs.has(subKey)}
                   onToggle={() => onToggleSub(subKey)}
                 />
               );
@@ -530,6 +590,12 @@ function chipStyle(active: boolean, color: string): React.CSSProperties {
 const styles: Record<string, React.CSSProperties> = {
   label: { display: "flex", flexDirection: "column", gap: 2, fontSize: 11, color: "var(--fg-muted,#666)" },
   select: { padding: 4, fontSize: 13, border: "1px solid var(--border,#ccc)", borderRadius: 4 },
+  search: {
+    padding: "6px 10px", fontSize: 13,
+    border: "1px solid var(--border,#ccc)", borderRadius: 6,
+    minWidth: 240, flex: "0 1 320px",
+    background: "var(--card)", color: "var(--text)",
+  },
   monthBar: {
     display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap",
     padding: "6px 8px",
