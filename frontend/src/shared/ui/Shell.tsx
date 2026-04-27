@@ -421,8 +421,48 @@ function buildSettingsTree(isAdmin: boolean, facturiBonusPending: number = 0): N
 // vizibil. Divider-ele rămân la locul lor (UI-ul se ocupă să nu lase
 // două consecutiv).
 
+// Mapare explicită path → modul logic, pentru cazurile unde primul segment
+// al URL-ului NU e numele modulului din `_CAPS` (ex. `/analiza/zi` → `vz_la_zi`,
+// `/grupe-arbore` → `grupe_produse`). Cheile sunt path-uri exacte sau prefixe
+// (cu trailing slash sau exact match). Restul iau primul segment ca fallback.
+const PATH_MODULE_OVERRIDES: Record<string, string> = {
+  "/analiza/zi": "vz_la_zi",
+  "/analiza/luni": "analiza_pe_luni",
+  "/analiza/magazin": "analiza_magazin",
+  "/analiza/magazin-dashboard": "analiza_magazin_dashboard",
+  "/analiza/margine": "margine",
+  "/analiza/marja-lunara": "marja_lunara",
+  "/analiza/promotii": "promotions",
+  "/analiza/top-magazine": "top_produse",
+  "/marketing/concurenta": "mkt_concurenta",
+  "/marketing/catalog": "mkt_catalog",
+  "/marketing/facing": "mkt_facing",
+  "/marketing/dash-face": "mkt_facing",
+  "/marketing/facing-config": "mkt_facing",
+  "/marketing/panouri": "mkt_panouri",
+  "/marketing/sika": "mkt_sika",
+  "/rapoarte/lunar": "rapoarte_lunar",
+  "/rapoarte-word": "rapoarte_word",
+  "/grupe-arbore": "grupe_produse",
+  "/grupe-arbore-clienti": "grupe_produse",
+  "/aprobari": "gallery",
+  "/chat": "ai",
+  "/comenzi-fara-ind": "comenzi_fara_ind",
+  "/marca-privata": "marca_privata",
+  "/evaluare": "evaluare_agenti",
+  "/prognoza": "prognoza",
+  "/promotii": "promotions",
+  "/topprod": "top_produse",
+};
+
 function moduleNameFromPath(path: string): string {
-  // "/parcurs" → "parcurs", "/api/foo" → "api". Robust la query/hash.
+  // 1. Match exact (cele mai specifice rute care nu urmăresc convenția).
+  if (path in PATH_MODULE_OVERRIDES) return PATH_MODULE_OVERRIDES[path];
+  // 2. Match pe prefix — `/evaluare/sal-fix` cade pe override-ul `/evaluare`.
+  for (const prefix of Object.keys(PATH_MODULE_OVERRIDES)) {
+    if (path.startsWith(prefix + "/")) return PATH_MODULE_OVERRIDES[prefix];
+  }
+  // 3. Fallback: primul segment al URL-ului.
   return path.replace(/^\//, "").split(/[?#/]/)[0] || "dashboard";
 }
 
