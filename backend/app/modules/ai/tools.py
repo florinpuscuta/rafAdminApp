@@ -76,6 +76,31 @@ def _check_blocked_tables(sql_lower: str) -> str | None:
     return None
 
 
+# Identificatori (tabele + coloane) care expun datele despre agenți. Pentru
+# rolul VIEWER blocăm orice query care le menționează — răspunsul AI nu
+# poate dezvălui nume / performanță individuală.
+_VIEWER_BLOCKED_IDENTS: tuple[str, ...] = (
+    "agents", "agent_aliases", "agent_visits", "agent_store_assignments",
+    "agent_store_bonus", "agent_compensation", "agent_month_inputs",
+    "agent_id", "agent_unificat", "agent_original", "full_name",
+)
+
+
+def _check_viewer_block(sql_lower: str) -> str | None:
+    """Pentru viewer: respinge orice SQL care atinge tabele / coloane despre agenți."""
+    from app.modules.ai.context import current_viewer_mode
+    if not current_viewer_mode.get():
+        return None
+    for ident in _VIEWER_BLOCKED_IDENTS:
+        if re.search(rf"\b{re.escape(ident)}\b", sql_lower):
+            return (
+                f"Rolul tău (viewer) nu permite query-uri pe date despre "
+                f"agenți. Identificator blocat: `{ident}`. Întreabă "
+                f"despre totaluri agregate fără breakdown per agent."
+            )
+    return None
+
+
 def _check_tenant(sql: str, tenant_ids: list[UUID]) -> str | None:
     """Validăm că SQL-ul referă cel puțin unul din UUID-urile autorizate.
     Pentru SIKADP user-ul are multiple org_ids și folosește
@@ -110,6 +135,8 @@ def validate_sql(sql: str, tenant_ids: list[UUID]) -> str | None:
     if _FORBIDDEN_READ_KEYWORDS.search(sql):
         return "Cuvinte cheie de modificare detectate (insert/update/delete/...)."
     if (e := _check_blocked_tables(sql.lower())) is not None:
+        return e
+    if (e := _check_viewer_block(sql.lower())) is not None:
         return e
     if (e := _check_tenant(sql, tenant_ids)) is not None:
         return e

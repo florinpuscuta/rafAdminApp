@@ -5,7 +5,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
+from app.core.rbac import UserRole, effective_role
 from app.modules.ai import service as ai_service
+from app.modules.ai.context import current_viewer_mode
 from app.modules.ai.schemas import (
     ConversationOut,
     CreateConversationRequest,
@@ -85,6 +87,7 @@ async def list_messages(
 async def send_message(
     conv_id: UUID,
     payload: SendMessageRequest,
+    user: User = Depends(get_current_user),
     org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
@@ -94,9 +97,16 @@ async def send_message(
             status.HTTP_404_NOT_FOUND,
             detail={"code": "not_found", "message": "Conversație inexistentă"},
         )
-    user_msg, asst_msg, provider = await ai_service.send_message(
-        session, conv, payload.content, tenant_ids=org_ids,
-    )
+    # Forțăm modul confidențial pentru viewer — propagat prin ContextVar la
+    # service + tools (system prompt augmentat + SQL block pe `agents` etc.).
+    is_viewer = effective_role(user) == UserRole.VIEWER
+    token = current_viewer_mode.set(is_viewer)
+    try:
+        user_msg, asst_msg, provider = await ai_service.send_message(
+            session, conv, payload.content, tenant_ids=org_ids,
+        )
+    finally:
+        current_viewer_mode.reset(token)
     return SendMessageResponse(
         user_message=MessageOut.model_validate(user_msg),
         assistant_message=MessageOut.model_validate(asst_msg),

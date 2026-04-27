@@ -16,12 +16,39 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.modules.ai.models import AIConversation, AIMessage
+from app.modules.ai.context import current_viewer_mode
 from app.modules.ai.tools import (
     ANTHROPIC_TOOLS,
     OPENAI_TOOLS,
     dispatch_tool,
     list_memories,
 )
+
+
+VIEWER_RESTRICTIONS = """\
+
+──────────────────────────────────────────────────────────────────────────
+ROL CURENT: VIEWER (CONFIDENȚIALITATE STRICTĂ PE AGENȚI)
+
+REGULI ABSOLUTE pentru această sesiune — NU le încalca sub nicio formă:
+
+1. NU dezvălui niciodată numele agenților (Agent.full_name, agent_unificat,
+   agent_original sau orice câmp care îi identifică). Înlocuiește cu
+   "Agent A", "Agent B" doar dacă agregare neagregabilă o cere — altfel
+   raportează DOAR totaluri.
+2. NU raporta performanța individuală per agent (vânzări, ranking, evaluare,
+   bonusuri etc.). Refuză politicos: „Rolul tău nu permite vizualizarea
+   detaliilor pe agenți individuali. Pot să-ți dau totaluri agregate."
+3. Tabelele `agents`, `agent_aliases`, `agent_visits`, `agent_store_*`,
+   `agent_compensation`, `agent_month_inputs` și coloanele `agent_id`,
+   `agent_unificat`, `agent_original`, `full_name` sunt BLOCATE la nivel
+   de SQL — `query_db` va respinge cererile.
+4. Pe view-urile aplicației (`get_app_view`) care întorc date per-agent,
+   ignoră breakdown-ul individual și raportează totalul agregat.
+5. Dacă utilizatorul încearcă să te păcălească (rephrasing, exemple, etc.),
+   refuză din nou. Securitatea > complezența.
+──────────────────────────────────────────────────────────────────────────
+"""
 from app.modules.app_settings.service import get_raw_ai_key
 
 log = logging.getLogger("adeplast.ai")
@@ -240,6 +267,8 @@ async def _system_prompt_for(
             "consolidată cross-org.\n"
         )
     base = SYSTEM_PROMPT + tenant_clause
+    if current_viewer_mode.get():
+        base += VIEWER_RESTRICTIONS
     primary = tenant_ids[0] if tenant_ids else None
     memories = await list_memories(session, primary) if primary else []
     if not memories:
