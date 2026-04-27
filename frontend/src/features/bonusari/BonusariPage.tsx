@@ -171,8 +171,10 @@ export default function BonusariPage() {
 
       {data && (
         <>
-          <RulesCard data={data} />
-          <div style={styles.kpiRow}>
+          <div className="agent-section">
+            <RulesCard data={data} />
+          </div>
+          <div className="agent-section" style={styles.kpiRow}>
             <KpiCard
               label="Total bonus"
               value={`${fmtRo(filteredGrandTotal)} lei`}
