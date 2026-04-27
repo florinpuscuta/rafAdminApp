@@ -16,6 +16,7 @@ import {
   setToken,
 } from "../../shared/api";
 import { setSentryUser } from "../../sentry";
+import { usePrivacy } from "../../shared/ui/PrivacyProvider";
 import * as authApi from "./api";
 import type {
   AuthResponse,
@@ -43,6 +44,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const { setForced } = usePrivacy();
+
+  // Pentru rolul `viewer` forțăm modul confidențial (ascunderea agenților).
+  // Flag-ul `forced` din PrivacyProvider face toggle-ul din Settings no-op
+  // și menține mereu ON, indiferent de localStorage.
+  useEffect(() => {
+    setForced(user?.roleV2 === "viewer");
+  }, [user?.roleV2, setForced]);
 
   // Helper: aducerea capabilităților nu blochează aplicația dacă pică
   // (frontend-ul cade pe `user.role === "admin"` ca fallback).

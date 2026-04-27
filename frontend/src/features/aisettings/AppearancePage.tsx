@@ -12,7 +12,7 @@ import { usePrivacy } from "../../shared/ui/PrivacyProvider";
  */
 export default function AppearancePage() {
   const { theme, setTheme, fontScale, setFontScale, zoom, setZoom } = useTheme();
-  const { hideAgents, toggleHideAgents } = usePrivacy();
+  const { hideAgents, toggleHideAgents, forced } = usePrivacy();
 
   return (
     <div style={styles.page}>
@@ -108,16 +108,26 @@ export default function AppearancePage() {
         </p>
         <button
           type="button"
+          data-wide="true"
           onClick={toggleHideAgents}
+          disabled={forced}
           style={{
             ...styles.optBtn,
             ...(hideAgents ? styles.optBtnActive : {}),
             alignSelf: "flex-start",
             minWidth: 220,
+            opacity: forced ? 0.7 : 1,
+            cursor: forced ? "not-allowed" : "pointer",
           }}
+          title={forced ? "Activat automat pentru rolul tău" : undefined}
         >
           {hideAgents ? "🔒 Mod confidențial ACTIV" : "🔓 Activează mod confidențial"}
         </button>
+        {forced && (
+          <p style={{ ...styles.hint, fontStyle: "italic", marginTop: 6 }}>
+            Activat automat pentru rolul tău (viewer). Nu poate fi dezactivat.
+          </p>
+        )}
       </section>
 
       {/* Reset */}

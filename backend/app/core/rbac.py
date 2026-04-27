@@ -167,9 +167,20 @@ _CAPS: dict[UserRole, set[str]] = {
         "dashboard", "parcurs", "activitate", "probleme",
         "mkt_concurenta", "mkt_facing", "mkt_panouri",
     },
+    # VIEWER vede tot ce vede DIRECTOR — toate modulele non-admin (rapoarte,
+    # analize, marketing, etc.). Restricția lui e că datele despre agenți sunt
+    # mascate automat în UI prin PrivacyProvider (forțat la login pentru viewer).
+    # Vedere fără identificarea agenților, util pentru audit / parteneri.
     UserRole.VIEWER: {
         "dashboard", "consolidat", "vz_la_zi", "analiza_pe_luni",
-        "top_produse",
+        "analiza_magazin", "analiza_magazin_dashboard", "comenzi_fara_ind",
+        "top_produse", "marca_privata", "margine", "marja_lunara", "mortare",
+        "targhet", "bonusari", "prognoza", "promotions", "evaluare_agenti",
+        "agents", "stores", "products", "sales", "orders", "gallery",
+        "rapoarte_word", "rapoarte_lunar", "monthly_report", "ai",
+        "activitate", "parcurs", "probleme",
+        "mkt_concurenta", "mkt_catalog", "mkt_facing", "mkt_panouri",
+        "mkt_sika", "grupe_produse", "audit",
     },
 }
 

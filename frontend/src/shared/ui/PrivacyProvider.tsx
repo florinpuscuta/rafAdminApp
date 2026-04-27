@@ -13,6 +13,10 @@ interface PrivacyAPI {
   setHideAgents: (v: boolean) => void;
   toggleHideAgents: () => void;
   maskAgent: (name: string | null | undefined) => string;
+  /** True dacă modul confidențial e forțat (ex. user cu rol `viewer`).
+   *  Toggle-ul din Settings devine read-only când e true. */
+  forced: boolean;
+  setForced: (v: boolean) => void;
 }
 
 const PrivacyContext = createContext<PrivacyAPI | null>(null);
@@ -32,36 +36,44 @@ export function PrivacyProvider({ children }: { children: ReactNode }) {
       return false;
     }
   });
+  const [forced, setForced] = useState<boolean>(false);
+
+  // Effective: dacă e forțat (viewer role), mereu ON; altfel preferința user.
+  const effectiveHide = forced || hideAgents;
 
   useEffect(() => {
-    document.body.classList.toggle("privacy-agents", hideAgents);
+    document.body.classList.toggle("privacy-agents", effectiveHide);
     try {
       localStorage.setItem(LS_KEY, hideAgents ? "1" : "0");
     } catch {
       /* ignore */
     }
-  }, [hideAgents]);
+  }, [effectiveHide, hideAgents]);
 
   const setHideAgents = useCallback((v: boolean) => setHideAgentsState(v), []);
-  const toggleHideAgents = useCallback(
-    () => setHideAgentsState((p) => !p),
-    [],
-  );
+  const toggleHideAgents = useCallback(() => {
+    if (forced) return; // no-op pentru viewer
+    setHideAgentsState((p) => !p);
+  }, [forced]);
 
   const maskAgent = useCallback(
     (name: string | null | undefined) => {
-      if (!hideAgents) return name ?? "";
+      if (!effectiveHide) return name ?? "";
       if (!name) return "—";
       const idx = (hashCode(name) % 26) + 1;
       const letter = String.fromCharCode(64 + idx);
       return `Agent ${letter}`;
     },
-    [hideAgents],
+    [effectiveHide],
   );
 
   const value = useMemo<PrivacyAPI>(
-    () => ({ hideAgents, setHideAgents, toggleHideAgents, maskAgent }),
-    [hideAgents, setHideAgents, toggleHideAgents, maskAgent],
+    () => ({
+      hideAgents: effectiveHide,
+      setHideAgents, toggleHideAgents, maskAgent,
+      forced, setForced,
+    }),
+    [effectiveHide, setHideAgents, toggleHideAgents, maskAgent, forced],
   );
 
   return (
