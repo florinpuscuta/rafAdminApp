@@ -11,8 +11,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.api import APIRouter
 from app.core.db import get_session
+from app.core.rbac import UserRole, effective_role
 from app.modules.agents import service as agents_service
-from app.modules.auth.deps import get_current_org_ids
+from app.modules.auth.deps import get_current_org_ids, get_current_user
+from app.modules.users.models import User
 
 from app.modules.dashboard.schemas import (
     DashboardOverview,
@@ -348,6 +350,27 @@ def _merge_overview(parts: list[DashboardOverview]) -> DashboardOverview:
     )
 
 
+def _strip_agent_data(o: DashboardOverview) -> DashboardOverview:
+    """Server-side mask: scoate orice info despre agenți din response.
+
+    Folosit pentru rolul VIEWER care nu trebuie să identifice persoane sau
+    să vadă breakdown-uri per-agent. Aplicat AICI ca să fie bullet-proof —
+    chiar dacă frontend-ul lor are JS vechi (cache mobile/PWA), datele
+    despre agenți pur și simplu nu mai există în payload.
+    """
+    o.top_agents = []
+    if o.kpis is not None:
+        o.kpis.distinct_mapped_agents = 0
+        o.kpis.unmapped_agent_rows = 0
+    if o.compare_kpis is not None:
+        o.compare_kpis.distinct_mapped_agents = 0
+        o.compare_kpis.unmapped_agent_rows = 0
+    if o.scope is not None:
+        o.scope.agent_id = None
+        o.scope.agent_name = None
+    return o
+
+
 @router.get("/overview", response_model=DashboardOverview)
 async def overview(
     year: int | None = Query(None, ge=1900, le=2100),
@@ -358,20 +381,28 @@ async def overview(
     product_id: UUID | None = Query(None, alias="productId"),
     chain: str | None = Query(None),
     category: str | None = Query(None),
+    user: User = Depends(get_current_user),
     org_ids: list[UUID] = Depends(get_current_org_ids),
     session: AsyncSession = Depends(get_session),
 ):
+    is_viewer = effective_role(user) == UserRole.VIEWER
+    # Pentru viewer ignorăm filtrul pe agent — răspunsul oricum nu va
+    # conține date despre agenți, iar request-ul cu agentId nu trebuie să
+    # filtreze rezultatele.
+    effective_agent_id = None if is_viewer else agent_id
+
     parts = []
     for tid in org_ids:
         parts.append(await _overview_for_org(
             session, tid,
             year=year, compare_year=compare_year, month=month,
-            store_id=store_id, agent_id=agent_id, product_id=product_id,
+            store_id=store_id, agent_id=effective_agent_id, product_id=product_id,
             chain=chain, category=category,
         ))
-    if len(parts) == 1:
-        return parts[0]
-    return _merge_overview(parts)
+    result = parts[0] if len(parts) == 1 else _merge_overview(parts)
+    if is_viewer:
+        result = _strip_agent_data(result)
+    return result
 
 
 # Cei 4 clienți KA — eticheta din UI → `client_original` din
