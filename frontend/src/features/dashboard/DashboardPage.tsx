@@ -249,7 +249,7 @@ export default function DashboardPage() {
         <div style={styles.scopeBreadcrumb}>
           <strong>Scope:</strong>{" "}
           {data.scope.storeName && <span>magazin <code>{data.scope.storeName}</code></span>}
-          {data.scope.agentName && <span>agent <code>{data.scope.agentName}</code></span>}
+          {data.scope.agentName && <span className="agent-private">agent <code>{data.scope.agentName}</code></span>}
           {data.scope.productName && (
             <span>produs <code>{data.scope.productCode} — {data.scope.productName}</code></span>
           )}
@@ -282,7 +282,9 @@ export default function DashboardPage() {
               compareYear={data.compareYear}
             />
             <Kpi label="Magazine canonice" value={String(data.kpis.distinctMappedStores)} />
-            <Kpi label="Agenți canonici" value={String(data.kpis.distinctMappedAgents)} />
+            <span className="agent-section">
+              <Kpi label="Agenți canonici" value={String(data.kpis.distinctMappedAgents)} />
+            </span>
           </section>
 
           {(data.kpis.unmappedStoreRows > 0 || data.kpis.unmappedAgentRows > 0) && (
@@ -295,7 +297,9 @@ export default function DashboardPage() {
                 </>
               )}
               {data.kpis.unmappedAgentRows > 0 && (
-                <Link to="/unmapped/agents">{data.kpis.unmappedAgentRows} linii fără agent canonic</Link>
+                <span className="agent-private">
+                  <Link to="/unmapped/agents">{data.kpis.unmappedAgentRows} linii fără agent canonic</Link>
+                </span>
               )}
             </div>
           )}
